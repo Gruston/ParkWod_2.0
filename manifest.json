@@ -2,7 +2,7 @@
   "name": "PARK WOD",
   "short_name": "PARK WOD",
   "description": "208 outdoor park workouts with smart timers, exercise guides, and workout logging",
-  "start_url": "/index.html",
+  "start_url": "/ParkWod_2.0",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
