@@ -46,6 +46,8 @@
   
   <script type="text/babel">
     const { useState, useMemo, useCallback, useEffect, useRef } = React;
+
+const APP_VERSION = "7.1";
     
 // ═══════════════════════════════════════════════════════════════
 // EXERCISE ENCYCLOPEDIA
@@ -171,6 +173,44 @@ function clearCustomization(workoutId, field) {
     if (Object.keys(data[id]).length === 0) delete data[id];
     localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(data));
   } catch (e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// APP SETTINGS STORAGE
+// ═══════════════════════════════════════════════════════════════
+const SETTINGS_KEY = "parkwod-settings";
+const DEFAULT_SETTINGS = { fontSize: "normal", audioDefault: true, displayName: "" };
+const FONT_SIZE_VALUES = { small: 14, normal: 16, large: 20, xlarge: 24 };
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_SETTINGS };
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_SETTINGS, ...parsed };
+  } catch { return { ...DEFAULT_SETTINGS }; }
+}
+
+function saveSettings(settings) {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+}
+
+function useSettings() {
+  const [settings, setSettings] = useState(() => loadSettings());
+  const update = useCallback((key, value) => {
+    setSettings(prev => {
+      const next = { ...prev, [key]: value };
+      saveSettings(next);
+      return next;
+    });
+  }, []);
+  const resetAll = useCallback(() => {
+    setSettings({ ...DEFAULT_SETTINGS });
+    saveSettings(DEFAULT_SETTINGS);
+  }, []);
+  // Returns pixel value for the current fontSize setting
+  const fontSizePx = FONT_SIZE_VALUES[settings.fontSize] || 16;
+  return { settings, update, resetAll, fontSizePx };
 }
 
 async function loadLogs() {
@@ -925,7 +965,7 @@ function TimerSettingsModal({ config, onSave, onClose }) {
 // ═══════════════════════════════════════════════════════════════
 // FULL SCREEN WORKOUT — Phase 2 Rewrite
 // ═══════════════════════════════════════════════════════════════
-function FullScreenWorkout({ workout, onExit }) {
+function FullScreenWorkout({ workout, onExit, fontSizePx, audioDefault }) {
   // Use customized text if available, otherwise original
   const warmupText = getCustomization(workout.id, "warmup", workout.warmup);
   const workoutText = getCustomization(workout.id, "workout", workout.workout);
@@ -965,7 +1005,7 @@ function FullScreenWorkout({ workout, onExit }) {
   const [started, setStarted] = useState(false);
   const [exerciseModal, setExerciseModal] = useState(null);
   const [settingsModal, setSettingsModal] = useState(false);
-  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [audioEnabled, setAudioEnabled] = useState(audioDefault !== false);
   const [timerOverrides, setTimerOverrides] = useState({});
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   
@@ -1202,7 +1242,7 @@ function FullScreenWorkout({ workout, onExit }) {
         ) : (
           <div style={{padding: "8px 20px"}}>
             {phase.content.split("\n").filter(l => l.trim()).map((line, i) => (
-              <div key={i} style={{fontSize: 17, color: "#e8e8e8", lineHeight: 1.7, marginBottom: 8, padding: "8px 12px", background: "#ffffff06", borderRadius: 10, borderLeft: `3px solid ${phase.color}40`}}>
+              <div key={i} style={{fontSize: Math.max(fontSizePx || 16, 17), color: "#e8e8e8", lineHeight: 1.7, marginBottom: 8, padding: "8px 12px", background: "#ffffff06", borderRadius: 10, borderLeft: `3px solid ${phase.color}40`}}>
                 <HighlightedText text={line} onExerciseTap={setExerciseModal} />
               </div>
             ))}
@@ -1663,6 +1703,174 @@ function WorkoutLogHistory({ workoutId, logs, diffOverrides, onEditLog }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// SETTINGS SCREEN
+// ═══════════════════════════════════════════════════════════════
+function SettingsScreen({ settings, onUpdate, onResetAll }) {
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [nameInput, setNameInput] = useState(settings.displayName || "");
+  const [nameSaved, setNameSaved] = useState(false);
+
+  const fontOptions = [
+    { key: "small", label: "Small", px: 14 },
+    { key: "normal", label: "Normal", px: 16 },
+    { key: "large", label: "Large", px: 20 },
+    { key: "xlarge", label: "X-Large", px: 24 },
+  ];
+
+  const handleSaveName = () => {
+    onUpdate("displayName", nameInput.trim());
+    setNameSaved(true);
+    setTimeout(() => setNameSaved(false), 2000);
+  };
+
+  const handleClearAllData = () => {
+    // Clear all parkwod localStorage keys
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith("parkwod") || key === "parkwod-logs" || key === "parkwod-diff-overrides" || key === "parkwod-settings" || key === "parkwod_customizations")) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
+    onResetAll();
+    setShowClearConfirm(false);
+    window.location.reload();
+  };
+
+  return (
+    <div style={sty.content}>
+      <div style={{marginBottom: 28}}>
+        <div style={{fontSize: 28, fontWeight: 900, color: "#fff", marginBottom: 4}}>Settings</div>
+        <div style={{fontSize: 14, color: "#888"}}>Customise your PARK WOD experience</div>
+      </div>
+
+      {/* ── Font Size ── */}
+      <div style={{marginBottom: 28}}>
+        <h3 style={sty.sectionTitle}>Text Size</h3>
+        <div style={{fontSize: 13, color: "#888", marginBottom: 12}}>Changes workout text in detail and fullscreen views</div>
+        <div style={{display: "flex", flexDirection: "column", gap: 8}}>
+          {fontOptions.map(opt => (
+            <button key={opt.key} onClick={() => onUpdate("fontSize", opt.key)} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              background: settings.fontSize === opt.key ? "#f9731615" : "#111122",
+              border: `2px solid ${settings.fontSize === opt.key ? "#f97316" : "#222"}`,
+              borderRadius: 14, padding: "14px 18px", cursor: "pointer", transition: "all 0.2s",
+            }}>
+              <div style={{display: "flex", alignItems: "center", gap: 12}}>
+                <span style={{fontSize: opt.px, fontWeight: 700, color: settings.fontSize === opt.key ? "#f97316" : "#ccc", minWidth: 30}}>{opt.label}</span>
+              </div>
+              <span style={{fontSize: opt.px, color: "#888"}}>20 KB Swings</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Audio Default ── */}
+      <div style={{marginBottom: 28}}>
+        <h3 style={sty.sectionTitle}>Audio</h3>
+        <button onClick={() => onUpdate("audioDefault", !settings.audioDefault)} style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%",
+          background: "#111122", border: "1px solid #222", borderRadius: 14, padding: "16px 18px", cursor: "pointer",
+        }}>
+          <div>
+            <div style={{fontSize: 15, fontWeight: 700, color: "#fff", marginBottom: 2}}>Workout Audio Cues</div>
+            <div style={{fontSize: 12, color: "#888"}}>Beeps for timer transitions and countdowns</div>
+          </div>
+          <div style={{
+            width: 48, height: 28, borderRadius: 14, padding: 2,
+            background: settings.audioDefault ? "#22c55e" : "#333",
+            display: "flex", alignItems: "center", transition: "background 0.2s",
+          }}>
+            <div style={{
+              width: 24, height: 24, borderRadius: 12, background: "#fff",
+              transform: settings.audioDefault ? "translateX(20px)" : "translateX(0)",
+              transition: "transform 0.2s",
+            }} />
+          </div>
+        </button>
+      </div>
+
+      {/* ── Display Name ── */}
+      <div style={{marginBottom: 28}}>
+        <h3 style={sty.sectionTitle}>Display Name</h3>
+        <div style={{fontSize: 13, color: "#888", marginBottom: 10}}>Used for the future leaderboard feature</div>
+        <div style={{display: "flex", gap: 8}}>
+          <input
+            type="text" value={nameInput} onChange={e => setNameInput(e.target.value)}
+            placeholder="Your name"
+            style={{flex: 1, background: "#111122", border: "1px solid #333", borderRadius: 12, padding: "12px 16px", color: "#fff", fontSize: 15, outline: "none", boxSizing: "border-box"}}
+          />
+          <button onClick={handleSaveName} style={{
+            background: nameSaved ? "#22c55e25" : "linear-gradient(135deg, #f97316, #ea580c)",
+            border: "none", borderRadius: 12, padding: "12px 18px",
+            color: nameSaved ? "#22c55e" : "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer",
+          }}>
+            {nameSaved ? "\u2713 Saved" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── App Info ── */}
+      <div style={{marginBottom: 28}}>
+        <h3 style={sty.sectionTitle}>About</h3>
+        <div style={{background: "#111122", border: "1px solid #222", borderRadius: 14, padding: 16}}>
+          <div style={{display: "flex", justifyContent: "space-between", marginBottom: 8}}>
+            <span style={{fontSize: 14, color: "#888"}}>App Version</span>
+            <span style={{fontSize: 14, fontWeight: 700, color: "#fff"}}>v{APP_VERSION}</span>
+          </div>
+          <div style={{display: "flex", justifyContent: "space-between", marginBottom: 8}}>
+            <span style={{fontSize: 14, color: "#888"}}>Workouts</span>
+            <span style={{fontSize: 14, fontWeight: 700, color: "#fff"}}>{RAW_DATA.length}</span>
+          </div>
+          <div style={{display: "flex", justifyContent: "space-between"}}>
+            <span style={{fontSize: 14, color: "#888"}}>Exercises</span>
+            <span style={{fontSize: 14, fontWeight: 700, color: "#fff"}}>{Object.keys(EXERCISE_INFO).length}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Danger Zone ── */}
+      <div style={{marginBottom: 100}}>
+        <h3 style={{...sty.sectionTitle, color: "#ef4444"}}>Danger Zone</h3>
+        <button onClick={() => setShowClearConfirm(true)} style={{
+          width: "100%", background: "#ef444410", border: "1px solid #ef444440", borderRadius: 14,
+          padding: "16px 18px", color: "#ef4444", fontSize: 15, fontWeight: 700, cursor: "pointer", textAlign: "center",
+        }}>
+          Clear All My Data
+        </button>
+        <div style={{fontSize: 12, color: "#666", marginTop: 8, textAlign: "center"}}>
+          This removes all workout logs, customizations, and settings. Cannot be undone.
+        </div>
+      </div>
+
+      {/* Clear data confirmation modal */}
+      {showClearConfirm && (
+        <div style={sty.modalOverlay} onClick={() => setShowClearConfirm(false)}>
+          <div style={{...sty.modalContent, maxWidth: 320, textAlign: "center"}} onClick={e => e.stopPropagation()}>
+            <div style={{fontSize: 40, marginBottom: 12}}>{"\u26A0\uFE0F"}</div>
+            <div style={{fontSize: 18, fontWeight: 800, color: "#ef4444", marginBottom: 8}}>Delete Everything?</div>
+            <div style={{fontSize: 14, color: "#888", marginBottom: 20, lineHeight: 1.6}}>
+              This will permanently delete all your workout logs, customisations, and settings. This cannot be undone.
+            </div>
+            <div style={{display: "flex", gap: 10}}>
+              <button onClick={() => setShowClearConfirm(false)} style={{
+                flex: 1, background: "#22c55e25", border: "1px solid #22c55e50", borderRadius: 12,
+                padding: "14px 16px", color: "#22c55e", fontSize: 15, fontWeight: 700, cursor: "pointer",
+              }}>Keep Data</button>
+              <button onClick={handleClearAllData} style={{
+                flex: 1, background: "#ef444425", border: "1px solid #ef444450", borderRadius: 12,
+                padding: "14px 16px", color: "#ef4444", fontSize: 15, fontWeight: 700, cursor: "pointer",
+              }}>Delete All</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // APP COMPONENT
 // ═══════════════════════════════════════════════════════════════
 function App() {
@@ -1678,6 +1886,7 @@ function App() {
   const [editingLog, setEditingLog] = useState(null);
 
   const { logs, loaded, addLog, updateLog, deleteLog, diffOverrides, setDiffOverride } = useWorkoutLogs();
+  const { settings, update: updateSetting, resetAll: resetSettings, fontSizePx } = useSettings();
 
   const filtered = useMemo(() => {
     return RAW_DATA.filter(w => {
@@ -1725,7 +1934,7 @@ function App() {
   };
 
   if (fullScreenMode && selectedWorkout) {
-    return <FullScreenWorkout workout={selectedWorkout} onExit={() => setFullScreenMode(false)} />;
+    return <FullScreenWorkout workout={selectedWorkout} onExit={() => setFullScreenMode(false)} fontSizePx={fontSizePx} audioDefault={settings.audioDefault} />;
   }
 
   return (
@@ -1739,7 +1948,7 @@ function App() {
             <span style={{fontSize: 28, fontWeight: 900, letterSpacing: -1, color: "#fff"}}>WOD</span>
           </div>
         )}
-        {screen !== "detail" && (
+        {screen !== "detail" && screen !== "settings" && (
           <div style={{fontSize: 13, color: "#888", marginTop: 2}}>{screen === "history" ? `${logs.length} logged` : `${filtered.length} of ${RAW_DATA.length} workouts`}</div>
         )}
       </header>
@@ -1767,6 +1976,7 @@ function App() {
           logs={logs}
           diffOverrides={diffOverrides}
           onEditLog={handleEditLog}
+          fontSizePx={fontSizePx}
         />
       )}
       {screen === "history" && (
@@ -1778,22 +1988,26 @@ function App() {
           onDeleteLog={deleteLog}
         />
       )}
+      {screen === "settings" && (
+        <SettingsScreen
+          settings={settings}
+          onUpdate={updateSetting}
+          onResetAll={resetSettings}
+        />
+      )}
 
       <nav style={sty.nav}>
         {[
           { id: "home", icon: "\u{1F3E0}", label: "Home" },
           { id: "library", icon: "\u{1F4DA}", label: "Library" },
           { id: "history", icon: "\u{1F4CB}", label: "History" },
+          { id: "settings", icon: "\u2699\uFE0F", label: "Settings" },
         ].map(tab => (
           <button key={tab.id} onClick={() => setScreen(tab.id)} style={{...sty.navBtn, color: screen === tab.id ? "#f97316" : "#888"}}>
             <span style={{fontSize: 22}}>{tab.icon}</span>
             <span style={{fontSize: 10, marginTop: 2}}>{tab.label}</span>
           </button>
         ))}
-        <button onClick={pickRandom} style={{...sty.navBtn, color: "#22c55e"}}>
-          <span style={{fontSize: 22}}>{"\u{1F3B2}"}</span>
-          <span style={{fontSize: 10, marginTop: 2}}>Random</span>
-        </button>
       </nav>
 
       {exerciseModal && <ExerciseModal exerciseKey={exerciseModal} onClose={() => setExerciseModal(null)} />}
@@ -2008,7 +2222,7 @@ function FilterSection({ title, items, selected, onToggle, colors }) {
 // ═══════════════════════════════════════════════════════════════
 // WORKOUT DETAIL (with START WORKOUT button + tappable exercises)
 // ═══════════════════════════════════════════════════════════════
-function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout, logs, diffOverrides, onEditLog }) {
+function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout, logs, diffOverrides, onEditLog, fontSizePx }) {
   // Customization state — loads from localStorage, falls back to original
   const [customRating, setCustomRating] = useState(() => getCustomization(w.id, "rating", w.rating));
   const [customDuration, setCustomDuration] = useState(() => getCustomization(w.id, "duration", w.duration));
@@ -2130,15 +2344,15 @@ function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout
       {/* Workout sections - now editable with tap-to-edit hint */}
       {(customWarmup || w.warmup) && (
         <div onClick={() => openEdit("warmup")} style={{cursor: "pointer", position: "relative"}}>
-          <WorkoutSection title={`WARMUP ${isWarmupCustomized ? "\u270F\uFE0F" : ""}`} icon={"\u{1F525}"} color="#eab308" content={customWarmup || w.warmup} onExerciseTap={onExerciseTap} />
+          <WorkoutSection title={`WARMUP ${isWarmupCustomized ? "\u270F\uFE0F" : ""}`} icon={"\u{1F525}"} color="#eab308" content={customWarmup || w.warmup} onExerciseTap={onExerciseTap} fontSizePx={fontSizePx} />
         </div>
       )}
       <div onClick={() => openEdit("workout")} style={{cursor: "pointer", position: "relative"}}>
-        <WorkoutSection title={`WORKOUT ${isWorkoutCustomized ? "\u270F\uFE0F" : ""}`} icon={"\u{1F4AA}"} color="#f97316" content={customWorkout || w.workout} onExerciseTap={onExerciseTap} />
+        <WorkoutSection title={`WORKOUT ${isWorkoutCustomized ? "\u270F\uFE0F" : ""}`} icon={"\u{1F4AA}"} color="#f97316" content={customWorkout || w.workout} onExerciseTap={onExerciseTap} fontSizePx={fontSizePx} />
       </div>
       {(customCore || w.core) && (
         <div onClick={() => openEdit("core")} style={{cursor: "pointer", position: "relative"}}>
-          <WorkoutSection title={`CORE ${isCoreCustomized ? "\u270F\uFE0F" : ""}`} icon={"\u{1F9E0}"} color="#8b5cf6" content={customCore || w.core} onExerciseTap={onExerciseTap} />
+          <WorkoutSection title={`CORE ${isCoreCustomized ? "\u270F\uFE0F" : ""}`} icon={"\u{1F9E0}"} color="#8b5cf6" content={customCore || w.core} onExerciseTap={onExerciseTap} fontSizePx={fontSizePx} />
         </div>
       )}
 
@@ -2219,8 +2433,9 @@ function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout
   );
 }
 
-function WorkoutSection({ title, icon, color, content, onExerciseTap }) {
+function WorkoutSection({ title, icon, color, content, onExerciseTap, fontSizePx }) {
   const lines = content.split("\n").filter(l => l.trim());
+  const textSize = fontSizePx || 15;
   return (
     <div style={{marginBottom: 20, background: "#111122", borderRadius: 16, overflow: "hidden", border: `1px solid ${color}30`}}>
       <div style={{padding: "12px 16px", background: color + "15", borderBottom: `1px solid ${color}30`, display: "flex", alignItems: "center", gap: 8}}>
@@ -2229,7 +2444,7 @@ function WorkoutSection({ title, icon, color, content, onExerciseTap }) {
       </div>
       <div style={{padding: 16}}>
         {lines.map((line, i) => (
-          <div key={i} style={{fontSize: 15, color: "#e0e0e0", lineHeight: 1.7, marginBottom: i < lines.length - 1 ? 6 : 0}}>
+          <div key={i} style={{fontSize: textSize, color: "#e0e0e0", lineHeight: 1.7, marginBottom: i < lines.length - 1 ? 6 : 0}}>
             <HighlightedText text={line} onExerciseTap={onExerciseTap} />
           </div>
         ))}
