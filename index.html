@@ -1664,27 +1664,44 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   // ── ACTIVE WORKOUT ──
   return (
     <div className="fs-active" style={{...sty.fsOverlay, background: oBg, fontFamily: DS.font.body}}>
-      {/* Top bar — polished with green progress line */}
+      {/* Top bar — with progress line, exit, toggles */}
       <div style={{position: "relative"}}>
         {/* Green progress line at very top */}
         <div style={{height: 3, background: outdoorMode ? "#ddd" : DS.colors.border}}>
           <div style={{height: "100%", background: DS.colors.green, borderRadius: 2, width: `${Math.min(100, (phaseIdx / Math.max(1, phases.length - 1)) * 100)}%`, transition: "width 0.5s ease"}} />
         </div>
-        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", background: oBg}}>
-          <button onClick={handleExit} style={{display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: "6px 0", color: "#ef4444", fontSize: 13, fontWeight: 600, cursor: "pointer"}}>
-            <Icon name="menu" size={18} color={oSub} />
+        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: oBg}}>
+          {/* Exit button — clearly visible */}
+          <button onClick={handleExit} style={{display: "flex", alignItems: "center", gap: 4, background: "none", border: `1px solid ${outdoorMode ? "#ccc" : DS.colors.border}`, borderRadius: DS.radius.md, padding: "6px 12px", color: "#ef4444", fontSize: 13, fontWeight: 700, cursor: "pointer"}}>
+            <Icon name="x" size={16} color="#ef4444" /> End
           </button>
-          <div style={{display: "flex", alignItems: "center", gap: 8}}>
-            <div style={{fontFamily: DS.font.display, fontSize: 18, letterSpacing: 2, color: oText}}>PARK WOD</div>
-          </div>
+
+          {/* Elapsed time — center */}
           <div style={{display: "flex", alignItems: "center", gap: 6}}>
-            <div style={{display: "flex", alignItems: "center", gap: 4, background: DS.colors.green + "15", borderRadius: DS.radius.pill, padding: "4px 10px"}}>
-              <span style={{width: 6, height: 6, borderRadius: 3, background: DS.colors.green}} />
-              <span style={{fontSize: 10, fontWeight: 700, color: DS.colors.green, letterSpacing: 0.5}}>LIVE SESSION</span>
-            </div>
-            <button onClick={() => setSettingsModal(true)} style={{background: "none", border: "none", padding: 4, cursor: "pointer"}}>
-              <Icon name="settings" size={18} color={oSub} />
+            <span style={{fontSize: 10, color: oSub, letterSpacing: 1, fontWeight: 700}}>TOTAL</span>
+            <span style={{fontFamily: DS.font.display, fontSize: 18, letterSpacing: 1, color: oText}}>{fmt(overall.elapsed)}</span>
+          </div>
+
+          {/* Toggle buttons — outdoor, voice, audio, settings */}
+          <div style={{display: "flex", gap: 4}}>
+            {/* Outdoor mode toggle */}
+            <button onClick={() => setOutdoorMode(o => !o)} style={{background: outdoorMode ? "#f59e0b25" : "none", border: `1px solid ${outdoorMode ? "#f59e0b" : outdoorMode ? "#ccc" : DS.colors.border}`, borderRadius: DS.radius.sm, padding: "5px 7px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center"}}>
+              <Icon name={outdoorMode ? "sun" : "moon"} size={16} color={outdoorMode ? "#f59e0b" : DS.colors.textMuted} />
             </button>
+            {/* Voice toggle */}
+            <button onClick={() => setVoiceEnabled(v => !v)} style={{background: voiceEnabled ? DS.colors.purple + "25" : "none", border: `1px solid ${voiceEnabled ? DS.colors.purple : outdoorMode ? "#ccc" : DS.colors.border}`, borderRadius: DS.radius.sm, padding: "5px 7px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center"}}>
+              <Icon name="mic" size={16} color={voiceEnabled ? DS.colors.purple : DS.colors.textMuted} />
+            </button>
+            {/* Audio toggle */}
+            <button onClick={() => setAudioEnabled(a => !a)} style={{background: audioEnabled ? DS.colors.green + "20" : "none", border: `1px solid ${audioEnabled ? DS.colors.green + "50" : outdoorMode ? "#ccc" : DS.colors.border}`, borderRadius: DS.radius.sm, padding: "5px 7px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center"}}>
+              <Icon name={audioEnabled ? "volume2" : "volumeX"} size={16} color={audioEnabled ? DS.colors.green : DS.colors.textMuted} />
+            </button>
+            {/* Timer settings — only for timed phases */}
+            {activeTimer && activeTimer.type !== "stopwatch" && (
+              <button onClick={() => setSettingsModal(true)} style={{background: "none", border: `1px solid ${outdoorMode ? "#ccc" : DS.colors.border}`, borderRadius: DS.radius.sm, padding: "5px 7px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center"}}>
+                <Icon name="settings" size={16} color={oSub} />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1877,7 +1894,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
               return (
                 <div style={{background: outdoorMode ? "#00000008" : phase.color + "08", borderRadius: DS.radius.xl, padding: "16px 18px", marginBottom: 12, borderLeft: `4px solid ${phase.color}`, position: "relative"}}>
                   <div style={{fontSize: 11, fontWeight: 700, color: phase.color, letterSpacing: 1.5, marginBottom: 6}}>CURRENT SET</div>
-                  <div style={{fontSize: 17, fontWeight: 700, color: oText, lineHeight: 1.5}}>
+                  <div style={{fontSize: fs.base + 2, fontWeight: 700, color: oText, lineHeight: 1.5}}>
                     <HighlightedText text={firstLine} onExerciseTap={setExerciseModal} />
                   </div>
                 </div>
@@ -1932,19 +1949,17 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
         </div>
       )}
 
-      {/* Bottom controls — polished with large touch targets */}
+      {/* Bottom controls — hidden on done screen since it has its own CTA buttons */}
+      {!isDone && (
       <div style={{position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", alignItems: "center", gap: 10, padding: "14px 16px 28px", background: outdoorMode ? "linear-gradient(transparent, #f5f5f0 30%)" : "linear-gradient(transparent, #0a0a0f 30%)"}}>
-        {phaseIdx > 0 && !isDone && (
+        {phaseIdx > 0 && (
           <button onClick={() => goToPhase(phaseIdx - 1)} style={{width: 52, height: 52, background: outdoorMode ? "#00000008" : DS.colors.surface, border: `1px solid ${outdoorMode ? "#ccc" : DS.colors.border}`, borderRadius: DS.radius.lg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer"}}>
             <Icon name="skipBack" size={20} color={outdoorMode ? "#333" : DS.colors.textSub} />
           </button>
         )}
-        {!isDone && (
           <button onClick={restartPhase} style={{width: 52, height: 52, background: outdoorMode ? "#00000008" : DS.colors.surface, border: `1px solid ${outdoorMode ? "#ccc" : DS.colors.border}`, borderRadius: DS.radius.lg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer"}} title="Restart this phase">
             <Icon name="rotateCcw" size={18} color={outdoorMode ? "#333" : DS.colors.textMuted} />
           </button>
-        )}
-        {!isDone && (
           <button onClick={togglePause} style={{
             border: "none", borderRadius: DS.radius.xl, padding: "16px 36px", fontSize: 15, fontWeight: 800, cursor: "pointer", minWidth: 160,
             background: (phase_timer.running || countdownLeft > 0) ? DS.gradient.orange : DS.colors.green + "20",
@@ -1955,15 +1970,15 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
             <Icon name={(phase_timer.running || countdownLeft > 0) ? "pause" : "play"} size={18} color={(phase_timer.running || countdownLeft > 0) ? "#fff" : DS.colors.green} />
             {(phase_timer.running || countdownLeft > 0) ? "PAUSE SESSION" : "RESUME"}
           </button>
-        )}
-        <button onClick={() => { if (isDone) { clearWorkoutRecovery(); onExit(); } else goToPhase(phaseIdx + 1); }} style={{
+        <button onClick={() => goToPhase(phaseIdx + 1)} style={{
           width: 52, height: 52, border: "none", borderRadius: DS.radius.lg, cursor: "pointer",
-          background: isDone ? DS.gradient.green : `linear-gradient(135deg, ${phases[Math.min(phaseIdx+1,phases.length-1)].color}, ${phase.color})`,
+          background: `linear-gradient(135deg, ${phases[Math.min(phaseIdx+1,phases.length-1)].color}, ${phase.color})`,
           display: "flex", alignItems: "center", justifyContent: "center",
         }}>
-          <Icon name={isDone ? "checkCircle" : "skipForward"} size={20} color="#fff" />
+          <Icon name="skipForward" size={20} color="#fff" />
         </button>
       </div>
+      )}
 
       {/* Finish block early text link */}
       {!isDone && started && (
@@ -3053,14 +3068,6 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
     return logs.reduce((sum, l) => sum + (l.totalMins || 0), 0);
   }, [logs]);
 
-  // Trending WODs — recent popular or suggested
-  const trendingWods = useMemo(() => {
-    const recent = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
-    const recentIds = recent.slice(0, 10).map(l => l.workoutId);
-    const candidates = RAW_DATA.filter(w => !recentIds.includes(w.id)).slice(0, 6);
-    return candidates.length > 0 ? candidates : RAW_DATA.slice(0, 6);
-  }, [logs]);
-
   return (
     <div style={{padding: "0 0 20px", overflowY: "auto", maxHeight: "calc(100vh - 140px)"}}>
       {/* ── DAILY PULSE Header ── */}
@@ -3166,49 +3173,6 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
           </div>
         );
       })()}
-
-      {/* ── TRENDING WODS — Horizontal Scroll ── */}
-      <div style={{padding: "0 20px", marginBottom: 20}}>
-        <div style={{fontFamily: DS.font.display, fontSize: 22, color: "#fff", letterSpacing: 1.5, marginBottom: 14}}>TRENDING WODS</div>
-      </div>
-      <div className="scroll-hide" style={{display: "flex", gap: 12, overflowX: "auto", paddingLeft: 20, paddingRight: 20, paddingBottom: 4}}>
-        {trendingWods.map((w, i) => {
-          const cat = CATEGORY_PATTERNS[w.equipment] || CATEGORY_PATTERNS.Mixed;
-          const diffColor = DIFFICULTY_COLORS[w.rating] || "#888";
-          return (
-            <button key={w.id} className={`slide-card`} onClick={() => onSelectWorkout(w)} style={{
-              flex: "0 0 260px", minHeight: 180, borderRadius: DS.radius.xl, padding: 0, border: "none", cursor: "pointer",
-              background: cat.bg, position: "relative", overflow: "hidden", textAlign: "left",
-            }}>
-              {/* Pattern overlay */}
-              <div style={{position: "absolute", inset: 0, background: cat.pattern, opacity: 0.6}} />
-              {/* Accent glow */}
-              <div style={{position: "absolute", bottom: -30, right: -30, width: 120, height: 120, borderRadius: "50%", background: cat.accent + "10"}} />
-              
-              <div style={{position: "relative", padding: 18, display: "flex", flexDirection: "column", height: "100%", justifyContent: "space-between"}}>
-                {/* Difficulty badge */}
-                <div>
-                  <span style={{fontSize: 10, fontWeight: 800, color: diffColor, background: diffColor + "20", padding: "4px 10px", borderRadius: DS.radius.pill, letterSpacing: 0.5, textTransform: "uppercase"}}>
-                    {w.rating}
-                  </span>
-                </div>
-                
-                <div style={{marginTop: "auto"}}>
-                  <div style={{fontFamily: DS.font.display, fontSize: 22, color: "#fff", letterSpacing: 1, lineHeight: 1.1}}>
-                    WOD #{w.id}
-                  </div>
-                  <div style={{display: "flex", gap: 12, marginTop: 8, alignItems: "center"}}>
-                    <span style={{display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: DS.colors.textSub}}>
-                      <Icon name="clock" size={13} color={DS.colors.textMuted} /> {w.duration}m
-                    </span>
-                    <span style={{fontSize: 12, color: DS.colors.textSub}}>{w.focus}</span>
-                  </div>
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
 
       {/* ── RECENT ACTIVITY ── */}
       {recentLogs.length > 0 && (
