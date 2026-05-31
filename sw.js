@@ -1,4 +1,4 @@
-const CACHE_NAME = 'parkwod-v7';
+const CACHE_NAME = 'parkwod-v8';
 const ASSETS = [
   '/',
   '/index.html',
