@@ -1,13 +1,13 @@
-const CACHE_NAME = 'parkwod-v9';
+const CACHE_NAME = 'parkwod-v10';
 const ASSETS = [
   '/',
   '/index.html',
+  '/app.js',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png',
   'https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js'
+  'https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js'
 ];
 
 // Install: cache all core assets

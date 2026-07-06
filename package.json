@@ -1,0 +1,23 @@
+{
+  "name": "parkwod",
+  "version": "3.0.0",
+  "description": "PARK WOD - outdoor fitness PWA",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "test": "node --test tests/",
+    "serve": "node tools/serve.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gruston/ParkWod_2.0.git"
+  },
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/gruston/ParkWod_2.0/issues"
+  },
+  "homepage": "https://github.com/gruston/ParkWod_2.0#readme",
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  },
+  "private": true
+}
