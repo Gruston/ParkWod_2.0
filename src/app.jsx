@@ -2355,7 +2355,7 @@ function SettingsScreen({ settings, onUpdate }) {
       {/* App Info */}
       <div style={{marginBottom: 24}}>
         <div style={sty.sectionTitle}>App Info</div>
-        <div style={{fontSize: 13, color: "#888"}}>PARK WOD v8 {"\u00B7"} {RAW_DATA.length} workouts {"\u00B7"} {Object.keys(EXERCISE_INFO).length} exercises</div>
+        <div style={{fontSize: 13, color: "#888"}}>PARK WOD {__APP_VERSION__} {"\u00B7"} {RAW_DATA.length} workouts {"\u00B7"} {Object.keys(EXERCISE_INFO).length} exercises</div>
       </div>
 
       {/* Export / Backup */}
@@ -2365,7 +2365,7 @@ function SettingsScreen({ settings, onUpdate }) {
           try {
             const backup = {
               exportDate: new Date().toISOString(),
-              version: "v8",
+              version: __APP_VERSION__,
               logs: JSON.parse(localStorage.getItem("parkwod-logs") || "[]"),
               diffOverrides: JSON.parse(localStorage.getItem("parkwod-diff-overrides") || "{}"),
               customizations: JSON.parse(localStorage.getItem(CUSTOM_STORAGE_KEY) || "{}"),
@@ -2438,8 +2438,24 @@ function SettingsScreen({ settings, onUpdate }) {
 }
 
 
+// Detects when a new service worker has taken control (a fresh deploy was
+// installed in the background). Guarded so the FIRST-ever install doesn't
+// count — only genuine updates show the banner.
+function useUpdateReady() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const hadController = !!navigator.serviceWorker.controller;
+    const onChange = () => { if (hadController) setReady(true); };
+    navigator.serviceWorker.addEventListener("controllerchange", onChange);
+    return () => navigator.serviceWorker.removeEventListener("controllerchange", onChange);
+  }, []);
+  return ready;
+}
+
 function App() {
   const [screenState, setScreenState] = useState("home");
+  const updateReady = useUpdateReady();
   const [prevScreen, setPrevScreen] = useState("home");
   const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem("parkwod:welcomed"));
   const screen = screenState;
@@ -2696,6 +2712,19 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+      {/* Update-ready banner — zIndex 800 sits below the workout overlay (900),
+          so it never interrupts an active workout */}
+      {updateReady && (
+        <button onClick={() => location.reload()} style={{
+          position: "fixed", bottom: 92, left: "50%", transform: "translateX(-50%)",
+          zIndex: 800, background: DS.gradient.orange, color: "#fff", border: "none",
+          borderRadius: 24, padding: "12px 22px", fontWeight: 700, fontSize: 14,
+          boxShadow: "0 4px 20px rgba(0,0,0,0.5)", cursor: "pointer", fontFamily: DS.font.body,
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          {"⬆"} Update ready {"·"} tap to refresh
+        </button>
       )}
       {/* Crash recovery prompt */}
       {recoveryPrompt && (
