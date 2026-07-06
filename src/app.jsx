@@ -7,10 +7,41 @@ import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
 import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary } from "./engine/timer.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 import { WORKOUT_BLOCKS } from "./data/blocks.js";
+import { compileWorkout, validateDraft, newDraft, newBlock, BLOCK_KINDS, KIND_FIELDS } from "./engine/builder.js";
 
-// Declared structure wins: use the stored, reviewed blocks when the text is
-// unmodified; fall back to live parsing only for user-customised text.
+// ── Custom workouts registry ──
+// Module-level cache kept in sync by useMyWorkouts (single instance in App)
+// so plain helpers like findWorkout stay correct outside React state flow.
+let CUSTOM_WORKOUTS = [];
+function getAllWorkouts() { return CUSTOM_WORKOUTS.length ? [...RAW_DATA, ...CUSTOM_WORKOUTS] : RAW_DATA; }
+function findWorkout(id) { return RAW_DATA.find(w => w.id === id) || CUSTOM_WORKOUTS.find(w => w.id === id); }
+
+function useMyWorkouts() {
+  const [myWorkouts, setMyWorkouts] = useState(() => {
+    const m = loadData("myWorkouts", []);
+    CUSTOM_WORKOUTS = Array.isArray(m) ? m : [];
+    return CUSTOM_WORKOUTS;
+  });
+  const persist = useCallback((list) => { CUSTOM_WORKOUTS = list; setMyWorkouts(list); saveData("myWorkouts", list); }, []);
+  const saveWorkout = useCallback((draft, existingId) => {
+    const list = Array.isArray(loadData("myWorkouts", [])) ? loadData("myWorkouts", []) : [];
+    const id = existingId || ("c" + (Math.max(0, ...list.map(w => parseInt(String(w.id).slice(1), 10) || 0)) + 1));
+    const compiled = compileWorkout(draft, id);
+    persist(existingId ? list.map(w => (w.id === existingId ? compiled : w)) : [...list, compiled]);
+    return compiled;
+  }, [persist]);
+  const deleteWorkout = useCallback((id) => {
+    const list = Array.isArray(loadData("myWorkouts", [])) ? loadData("myWorkouts", []) : [];
+    persist(list.filter(w => w.id !== id));
+  }, [persist]);
+  return { myWorkouts, saveWorkout, deleteWorkout };
+}
+
+// Declared structure wins: custom workouts carry their blocks inline; library
+// workouts use the stored, reviewed blocks. Live parsing only for
+// user-customised text.
 function getWorkoutBlocks(workout, field, liveText) {
+  if (workout.custom && workout.blocks && workout.blocks[field] && liveText === workout[field]) return workout.blocks[field];
   const stored = WORKOUT_BLOCKS[workout.id];
   if (stored && stored[field] && liveText === workout[field]) return stored[field];
   return parseBlocks(liveText);
@@ -2015,15 +2046,15 @@ function StatsView({ logs, onSelectWorkout }) {
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
     const tally = (arr) => { const m = {}; for (const x of arr) if (x) m[x] = (m[x] || 0) + 1; return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 6); };
-    const byFormat = tally(logs.map(l => { const w = RAW_DATA.find(r => r.id === l.workoutId); return (l.format || (w && w.format) || "").toUpperCase(); }));
-    const byFocus = tally(logs.map(l => { const w = RAW_DATA.find(r => r.id === l.workoutId); return w && w.focus; }));
+    const byFormat = tally(logs.map(l => { const w = findWorkout(l.workoutId); return (l.format || (w && w.format) || "").toUpperCase(); }));
+    const byFocus = tally(logs.map(l => { const w = findWorkout(l.workoutId); return w && w.focus; }));
     return { cur, best, weeks, pbs, most, byFormat, byFocus };
   }, [logs]);
 
   const card = { background: "#111122", border: "1px solid #222", borderRadius: 14, padding: 16, marginBottom: 12 };
   const heading = { fontSize: 12, fontWeight: 700, color: "#888", letterSpacing: 1.5, marginBottom: 12 };
   const maxWeek = Math.max(1, ...s.weeks.map(w => w.count));
-  const wName = (id) => { const w = RAW_DATA.find(r => r.id === id); return w ? `#${w.id} · ${w.focus}` : `#${id}`; };
+  const wName = (id) => { const w = findWorkout(id); if (!w) return `#${id}`; return w.custom ? w.name : `#${w.id} · ${w.focus}`; };
   const daysAgo = (t) => { const d = Math.floor((Date.now() - t) / 86400000); return d === 0 ? "today" : d === 1 ? "yesterday" : `${d}d ago`; };
   const bar = (label, count, max, color) => (
     <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -2067,7 +2098,7 @@ function StatsView({ logs, onSelectWorkout }) {
         <div style={heading}>PERSONAL BESTS</div>
         {s.pbs.length === 0 && <div style={{ fontSize: 13, color: "#666" }}>Repeat a workout to set your first PB.</div>}
         {s.pbs.map(p => (
-          <button key={p.workoutId} onClick={() => { const w = RAW_DATA.find(r => r.id === p.workoutId); if (w) onSelectWorkout(w); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", borderBottom: "1px solid #1a1a2e", padding: "10px 0", cursor: "pointer" }}>
+          <button key={p.workoutId} onClick={() => { const w = findWorkout(p.workoutId); if (w) onSelectWorkout(w); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", borderBottom: "1px solid #1a1a2e", padding: "10px 0", cursor: "pointer" }}>
             <div style={{ textAlign: "left" }}>
               <div style={{ fontSize: 14, fontWeight: 800, color: "#ff8a3a" }}>{wName(p.workoutId)}</div>
               <div style={{ fontSize: 11, color: "#666" }}>{p.count} attempts · set {new Date(p.log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</div>
@@ -2081,7 +2112,7 @@ function StatsView({ logs, onSelectWorkout }) {
       <div style={card}>
         <div style={heading}>MOST TRAINED</div>
         {s.most.map(m => (
-          <button key={m.workoutId} onClick={() => { const w = RAW_DATA.find(r => r.id === m.workoutId); if (w) onSelectWorkout(w); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", borderBottom: "1px solid #1a1a2e", padding: "10px 0", cursor: "pointer" }}>
+          <button key={m.workoutId} onClick={() => { const w = findWorkout(m.workoutId); if (w) onSelectWorkout(w); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", borderBottom: "1px solid #1a1a2e", padding: "10px 0", cursor: "pointer" }}>
             <div style={{ textAlign: "left" }}>
               <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{wName(m.workoutId)}</div>
               <div style={{ fontSize: 11, color: "#666" }}>last done {daysAgo(m.last)}{m.best ? ` · best: ${formatLogResult(m.best)}` : ""}</div>
@@ -2119,7 +2150,7 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
     if (historySearch) {
       const s = historySearch.toLowerCase();
       filtered = filtered.filter(l => {
-        const w = RAW_DATA.find(r => r.id === l.workoutId);
+        const w = findWorkout(l.workoutId);
         if (!w) return false;
         return w.id.toString().includes(s) || w.format.toLowerCase().includes(s) || w.focus.toLowerCase().includes(s) || 
                w.equipment.toLowerCase().includes(s) || (l.notes || "").toLowerCase().includes(s);
@@ -2269,16 +2300,17 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
       {/* List View */}
       {viewMode !== "stats" && <div style={{marginBottom: 80}}>
         {sortedLogs.map(log => {
-          const w = RAW_DATA.find(r => r.id === log.workoutId);
-          if (!w) return null;
+          const found = findWorkout(log.workoutId);
+          // Logs outlive deleted custom workouts — show them rather than hide
+          const w = found || { id: log.workoutId, custom: true, name: `${log.workoutId} (deleted)`, format: log.format || "custom", focus: "deleted workout", rating: "Medium" };
           const rating = diffOverrides[w.id] || w.rating;
           const resultStr = formatLogResult(log);
           return (
             <div key={log.id} style={{background: "#111122", border: "1px solid #222", borderRadius: 14, padding: 14, marginBottom: 8}}>
               <div style={{display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6}}>
                 <div>
-                  <button onClick={() => onSelectWorkout(w)} style={{background: "none", border: "none", padding: 0, cursor: "pointer"}}>
-                    <span style={{fontSize: 17, fontWeight: 800, color: "#ff8a3a"}}>#{w.id}</span>
+                  <button onClick={() => found && onSelectWorkout(found)} style={{background: "none", border: "none", padding: 0, cursor: found ? "pointer" : "default"}}>
+                    <span style={{fontSize: 17, fontWeight: 800, color: found ? "#ff8a3a" : "#666"}}>{w.custom ? w.name : `#${w.id}`}</span>
                   </button>
                   <span style={{fontSize: 12, color: "#666", marginLeft: 8}}>{new Date(log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
                 </div>
@@ -2468,6 +2500,208 @@ class ErrorBoundary extends React.Component {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// WORKOUT BUILDER SCREEN — structured-only, multi-block
+// ═══════════════════════════════════════════════════════════════
+const bs = {
+  input: { width: "100%", background: "#111122", border: "1px solid #444", borderRadius: 10, padding: "10px 12px", color: "#fff", fontSize: 15, boxSizing: "border-box", outline: "none", fontFamily: "inherit" },
+  numInput: { width: 72, background: "#111122", border: "1px solid #444", borderRadius: 8, padding: "8px 10px", color: "#fff", fontSize: 14, boxSizing: "border-box", outline: "none", textAlign: "center" },
+  label: { fontSize: 11, color: "#888", fontWeight: 700, letterSpacing: 0.5, marginBottom: 4, display: "block" },
+  select: { width: "100%", background: "#111122", border: "1px solid #444", borderRadius: 10, padding: "10px 12px", color: "#fff", fontSize: 14, outline: "none", fontFamily: "inherit" },
+  blockCard: { background: "#111122", border: "1px solid #333", borderRadius: 14, padding: 14, marginBottom: 10 },
+  iconBtn: { background: "none", border: "1px solid #444", borderRadius: 8, padding: "4px 10px", color: "#888", fontSize: 13, cursor: "pointer" },
+};
+
+const FIELD_LABELS = { minutes: "Minutes", workSeconds: "Work (s)", restSeconds: "Rest (s)", rounds: "Rounds", exerciseSeconds: "Secs/exercise", capMinutes: "Time cap (min)" };
+const KIND_EXTRA_FIELDS = { fortime: ["capMinutes"], circuit: ["exerciseSeconds", "restSeconds", "rounds"], tabata: ["workSeconds", "restSeconds", "rounds"] };
+
+function BuilderScreen({ initialDraft, editingId, logsCount, onSave, onCancel }) {
+  const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(initialDraft)));
+  const [errors, setErrors] = useState([]);
+  const [kindPicker, setKindPicker] = useState(null); // "blocks" | "coreBlocks" | null
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(initialDraft), [draft, initialDraft]);
+
+  const patch = (p) => setDraft(d => ({ ...d, ...p }));
+  const patchBlock = (listKey, i, p) => setDraft(d => ({ ...d, [listKey]: d[listKey].map((b, j) => (j === i ? { ...b, ...p } : b)) }));
+  const removeBlock = (listKey, i) => setDraft(d => ({ ...d, [listKey]: d[listKey].filter((_, j) => j !== i) }));
+  const moveBlock = (listKey, i, dir) => setDraft(d => {
+    const list = [...d[listKey]]; const j = i + dir;
+    if (j < 0 || j >= list.length) return d;
+    [list[i], list[j]] = [list[j], list[i]];
+    return { ...d, [listKey]: list };
+  });
+  const patchExercise = (listKey, i, j, p) => setDraft(d => ({
+    ...d, [listKey]: d[listKey].map((b, bi) => bi !== i ? b : { ...b, exercises: b.exercises.map((e, ei) => (ei === j ? { ...e, ...p } : e)) }),
+  }));
+  const addExercise = (listKey, i) => setDraft(d => ({
+    ...d, [listKey]: d[listKey].map((b, bi) => bi !== i ? b : { ...b, exercises: [...b.exercises, { reps: "", name: "" }] }),
+  }));
+  const removeExercise = (listKey, i, j) => setDraft(d => ({
+    ...d, [listKey]: d[listKey].map((b, bi) => bi !== i ? b : { ...b, exercises: b.exercises.filter((_, ei) => ei !== j) }),
+  }));
+
+  // Live phase strip from the current draft (best-effort while incomplete)
+  const phasePreview = useMemo(() => {
+    const labels = [];
+    if ((draft.warmup || "").trim()) labels.push({ label: "Warmup", color: "#eab308" });
+    try {
+      const compiled = compileWorkout({ ...draft, name: draft.name || "x" }, "preview");
+      compiled.blocks.workout.forEach(b => labels.push({ label: b.timer.label || "Workout", color: "#ff8a3a" }));
+      (compiled.blocks.core || []).forEach(() => labels.push({ label: "Core", color: "#8b5cf6" }));
+    } catch (e) { /* incomplete draft — show what we have */ }
+    return labels;
+  }, [draft]);
+
+  const handleSave = () => {
+    const problems = validateDraft(draft);
+    setErrors(problems);
+    if (problems.length === 0) onSave(draft);
+  };
+
+  const renderBlockEditor = (listKey, b, i, count) => {
+    const kindDef = BLOCK_KINDS.find(k => k.kind === b.kind);
+    const fields = KIND_EXTRA_FIELDS[b.kind] || KIND_FIELDS[b.kind];
+    return (
+      <div key={i} style={bs.blockCard}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#ff8a3a" }}>{kindDef ? kindDef.label : b.kind}</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {count > 1 && <button style={bs.iconBtn} onClick={() => moveBlock(listKey, i, -1)}>{"↑"}</button>}
+            {count > 1 && <button style={bs.iconBtn} onClick={() => moveBlock(listKey, i, 1)}>{"↓"}</button>}
+            <button style={{ ...bs.iconBtn, color: "#ef4444", borderColor: "#ef444440" }} onClick={() => removeBlock(listKey, i)}>{"✕"}</button>
+          </div>
+        </div>
+        {fields.length > 0 && (
+          <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+            {fields.map(f => (
+              <div key={f}>
+                <span style={bs.label}>{FIELD_LABELS[f]}</span>
+                <input type="number" min="0" value={b[f]} onChange={e => patchBlock(listKey, i, { [f]: e.target.value })} style={bs.numInput} />
+              </div>
+            ))}
+          </div>
+        )}
+        <span style={bs.label}>{b.kind === "emom" ? "Exercises (one per minute slot, cycling)" : "Exercises"}</span>
+        {b.exercises.map((e, j) => (
+          <div key={j} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+            <input type="number" min="0" placeholder="reps" value={e.reps} onChange={ev => patchExercise(listKey, i, j, { reps: ev.target.value })} style={{ ...bs.numInput, width: 58 }} />
+            <input list="builder-exercise-list" placeholder="exercise name" value={e.name} onChange={ev => patchExercise(listKey, i, j, { name: ev.target.value })} style={{ ...bs.input, flex: 1 }} />
+            <button style={{ ...bs.iconBtn, padding: "8px 10px" }} onClick={() => removeExercise(listKey, i, j)}>{"✕"}</button>
+          </div>
+        ))}
+        <button onClick={() => addExercise(listKey, i)} style={{ ...bs.iconBtn, color: "#3ddc84", borderColor: "#3ddc8440", marginTop: 2 }}>+ Add exercise</button>
+      </div>
+    );
+  };
+
+  const kindPickerModal = kindPicker && (
+    <div style={sty.modalOverlay} onClick={() => setKindPicker(null)}>
+      <div style={{ ...sty.modalContent, maxWidth: 340 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#fff", marginBottom: 12 }}>Choose a format</div>
+        {BLOCK_KINDS.map(k => (
+          <button key={k.kind} onClick={() => { setDraft(d => ({ ...d, [kindPicker]: [...d[kindPicker], newBlock(k.kind)] })); setKindPicker(null); }} style={{
+            display: "block", width: "100%", textAlign: "left", background: "#111122", border: "1px solid #333",
+            borderRadius: 12, padding: "12px 14px", marginBottom: 8, cursor: "pointer",
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#ff8a3a" }}>{k.label}</div>
+            <div style={{ fontSize: 12, color: "#888" }}>{k.desc}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: DS.colors.bg, zIndex: 850, display: "flex", flexDirection: "column" }}>
+      {/* datalist for exercise autocomplete (encyclopedia names) */}
+      <datalist id="builder-exercise-list">
+        {Object.values(EXERCISE_INFO).map(info => <option key={info.name} value={info.name} />)}
+      </datalist>
+
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid #222" }}>
+        <button onClick={() => (dirty ? setConfirmCancel(true) : onCancel())} style={{ background: "none", border: "1px solid #444", borderRadius: 10, padding: "8px 14px", color: "#ef4444", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{"✕"} Cancel</button>
+        <div style={{ fontFamily: DS.font.display, fontSize: 20, letterSpacing: 1, color: "#fff" }}>{editingId ? "EDIT WORKOUT" : "CREATE WORKOUT"}</div>
+        <button onClick={handleSave} style={{ background: DS.gradient.green, border: "none", borderRadius: 10, padding: "8px 18px", color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>SAVE</button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: 20, paddingBottom: 60 }}>
+        {/* Live phase preview */}
+        {phasePreview.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "#666", fontWeight: 700, marginRight: 4 }}>{phasePreview.length} PHASES:</span>
+            {phasePreview.map((p, i) => (
+              <span key={i} style={{ fontSize: 11, color: p.color, fontWeight: 600, background: p.color + "15", padding: "3px 10px", borderRadius: 12 }}>{p.label}</span>
+            ))}
+          </div>
+        )}
+
+        {/* Details */}
+        <span style={bs.label}>Name</span>
+        <input value={draft.name} onChange={e => patch({ name: e.target.value })} placeholder="e.g. Saturday Smasher" style={{ ...bs.input, marginBottom: 12 }} />
+        <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+          <div style={{ flex: 1 }}>
+            <span style={bs.label}>Equipment</span>
+            <select value={draft.equipment} onChange={e => patch({ equipment: e.target.value })} style={bs.select}>
+              {ALL_EQUIPMENT.map(x => <option key={x} value={x}>{x}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <span style={bs.label}>Focus</span>
+            <select value={draft.focus} onChange={e => patch({ focus: e.target.value })} style={bs.select}>
+              {ALL_FOCUSES.map(x => <option key={x} value={x}>{x}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <span style={bs.label}>Difficulty</span>
+            <select value={draft.rating} onChange={e => patch({ rating: e.target.value })} style={bs.select}>
+              {ALL_RATINGS.map(x => <option key={x} value={x}>{x}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* Warmup */}
+        <span style={bs.label}>Warmup (optional, untimed)</span>
+        <input value={draft.warmup} onChange={e => patch({ warmup: e.target.value })} placeholder="e.g. 2 laps w 10 squats, 10 arm circles" style={{ ...bs.input, marginBottom: 20 }} />
+
+        {/* Workout blocks */}
+        <div style={{ fontSize: 13, fontWeight: 800, color: "#ff8a3a", letterSpacing: 1, marginBottom: 8 }}>WORKOUT BLOCKS</div>
+        {draft.blocks.map((b, i) => renderBlockEditor("blocks", b, i, draft.blocks.length))}
+        <button onClick={() => setKindPicker("blocks")} style={{ ...bs.input, textAlign: "center", color: "#3ddc84", border: "1px dashed #3ddc8460", cursor: "pointer", marginBottom: 20 }}>+ Add block</button>
+
+        {/* Core blocks */}
+        <div style={{ fontSize: 13, fontWeight: 800, color: "#8b5cf6", letterSpacing: 1, marginBottom: 8 }}>CORE (OPTIONAL)</div>
+        {draft.coreBlocks.map((b, i) => renderBlockEditor("coreBlocks", b, i, draft.coreBlocks.length))}
+        <button onClick={() => setKindPicker("coreBlocks")} style={{ ...bs.input, textAlign: "center", color: "#8b5cf6", border: "1px dashed #8b5cf660", cursor: "pointer", marginBottom: 20 }}>+ Add core block</button>
+
+        {/* Validation errors */}
+        {errors.length > 0 && (
+          <div style={{ background: "#2a0f0f", border: "1px solid #ef4444", borderRadius: 12, padding: 12, marginBottom: 12 }}>
+            {errors.map((e, i) => <div key={i} style={{ fontSize: 13, color: "#ef4444" }}>{"·"} {e}</div>)}
+          </div>
+        )}
+        {editingId && logsCount > 0 && (
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>Your {logsCount} logged session{logsCount > 1 ? "s" : ""} for this workout will stay attached.</div>
+        )}
+      </div>
+
+      {kindPickerModal}
+      {confirmCancel && (
+        <div style={sty.modalOverlay} onClick={() => setConfirmCancel(false)}>
+          <div style={{ ...sty.modalContent, maxWidth: 300, textAlign: "center" }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", marginBottom: 12 }}>Discard changes?</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setConfirmCancel(false)} style={{ flex: 1, background: "#222", border: "1px solid #444", borderRadius: 10, padding: "10px", color: "#999", fontSize: 13, cursor: "pointer" }}>Keep editing</button>
+              <button onClick={onCancel} style={{ flex: 1, background: "#ef444425", border: "1px solid #ef4444", borderRadius: 10, padding: "10px", color: "#ef4444", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Discard</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // APP COMPONENT
 // ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
@@ -2638,6 +2872,7 @@ function SettingsScreen({ settings, onUpdate }) {
               if (data.customizations && typeof data.customizations === "object") { saveData("customizations", data.customizations); restored++; }
               if (data.settings && typeof data.settings === "object") { saveData("settings", data.settings); restored++; }
               if (data.favourites && Array.isArray(data.favourites)) { saveData("favourites", data.favourites); restored++; }
+              if (data.myWorkouts && Array.isArray(data.myWorkouts)) { saveData("myWorkouts", data.myWorkouts); restored++; }
               alert(`Backup restored! (${restored} sections imported${data.logs ? `, ${data.logs.length} logs` : ""})\n\nThe page will now reload.`);
               window.location.reload();
             } catch(err) { alert("Invalid backup file. Please select a valid PARK WOD backup JSON file."); }
@@ -2740,7 +2975,10 @@ function App() {
     setScreen(prevScreen || "library");
   }, [prevScreen, setScreen]);
   const [selectedWorkout, setSelectedWorkout] = useState(null);
-  const [filters, setFilters] = useState({ equipment: [], rating: [], format: [], focus: [], search: "" });
+  const [filters, setFilters] = useState({ equipment: [], rating: [], format: [], focus: [], search: "", mine: false });
+  const { myWorkouts, saveWorkout, deleteWorkout } = useMyWorkouts();
+  // Builder: null | { draft, editingId } — renders full-screen over everything
+  const [builder, setBuilder] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
   const [excludedMovements, setExcludedMovements] = useState([]);
   const [showExclusions, setShowExclusions] = useState(false);
@@ -2758,14 +2996,15 @@ function App() {
   useEffect(() => {
     const recovery = loadWorkoutRecovery();
     if (recovery && recovery.started) {
-      const w = RAW_DATA.find(r => r.id === recovery.workoutId);
+      const w = findWorkout(recovery.workoutId);
       if (w) setRecoveryPrompt({ ...recovery, workout: w });
       else clearWorkoutRecovery();
     }
   }, []);
 
   const filtered = useMemo(() => {
-    return RAW_DATA.filter(w => {
+    return getAllWorkouts().filter(w => {
+      if (filters.mine && !w.custom) return false;
       if (filters.equipment.length && !filters.equipment.includes(w.equipment)) return false;
       if (filters.rating.length && !filters.rating.includes(diffOverrides[w.id] || w.rating)) return false;
       if (filters.format.length && !filters.format.includes(w.format)) return false;
@@ -2774,13 +3013,14 @@ function App() {
       if (filters.search) {
         const s = filters.search.toLowerCase();
         const matchesNum = w.id.toString().includes(s);
+        const matchesName = (w.name || "").toLowerCase().includes(s);
         const matchesText = (w.workout + " " + w.warmup + " " + w.core).toLowerCase().includes(s);
         const matchesFmt = w.format.toLowerCase().includes(s);
-        if (!matchesNum && !matchesText && !matchesFmt) return false;
+        if (!matchesNum && !matchesName && !matchesText && !matchesFmt) return false;
       }
       return true;
     });
-  }, [filters, excludedMovements, diffOverrides]);
+  }, [filters, excludedMovements, diffOverrides, myWorkouts]);
 
   const [randomPreview, setRandomPreview] = useState(null);
 
@@ -2817,7 +3057,7 @@ function App() {
   };
 
   const handleEditLog = (log) => {
-    const w = RAW_DATA.find(r => r.id === log.workoutId);
+    const w = findWorkout(log.workoutId);
     if (w) {
       setEditingLog(log);
       setLogModal({ workout: w, existingLog: log });
@@ -2890,6 +3130,7 @@ function App() {
           showExclusions={showExclusions} setShowExclusions={setShowExclusions}
           logs={logs} diffOverrides={diffOverrides}
           favs={favs} onToggleFav={toggleFav}
+          onCreateNew={() => setBuilder({ draft: newDraft(), editingId: null })}
         />
       </div>}
       {screen === "detail" && selectedWorkout && <div className="screen-fade" key={`detail-${selectedWorkout.id}`}>
@@ -2903,8 +3144,23 @@ function App() {
           onEditLog={handleEditLog}
           fontSizeKey={settings.fontSize}
           isFav={isFav(selectedWorkout.id)} onToggleFav={() => toggleFav(selectedWorkout.id)}
+          onEditCustom={selectedWorkout.custom ? () => setBuilder({ draft: selectedWorkout.draft, editingId: selectedWorkout.id }) : null}
+          onDeleteCustom={selectedWorkout.custom ? () => { deleteWorkout(selectedWorkout.id); setSelectedWorkout(null); setScreen("library"); } : null}
         />
       </div>}
+      {builder && (
+        <BuilderScreen
+          initialDraft={builder.draft}
+          editingId={builder.editingId}
+          logsCount={builder.editingId ? logs.filter(l => l.workoutId === builder.editingId).length : 0}
+          onCancel={() => setBuilder(null)}
+          onSave={(draft) => {
+            const compiled = saveWorkout(draft, builder.editingId);
+            setBuilder(null);
+            openWorkout(compiled);
+          }}
+        />
+      )}
       {screen === "history" && <div className="screen-fade" key="history">
         <HistoryScreen
           logs={logs}
@@ -3164,7 +3420,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
             <div style={{fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.7)", marginTop: 4, letterSpacing: 0.5}}>
               {(() => {
                 const focuses = [...new Set(RAW_DATA.map(w => w.focus))];
-                const recentFocuses = [...logs].sort((a,b) => new Date(b.date)-new Date(a.date)).slice(0,2).map(l => { const w = RAW_DATA.find(r => r.id === l.workoutId); return w ? w.focus : null; }).filter(Boolean);
+                const recentFocuses = [...logs].sort((a,b) => new Date(b.date)-new Date(a.date)).slice(0,2).map(l => { const w = findWorkout(l.workoutId); return w ? w.focus : null; }).filter(Boolean);
                 const next = focuses.find(f => !recentFocuses.includes(f)) || focuses[0];
                 return next ? next.toUpperCase() : "FULL BODY";
               })()}
@@ -3200,7 +3456,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
         if (logs.length < 1) return null;
         const sortedLogs = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
         const recentFocuses = sortedLogs.slice(0, 2).map(l => {
-          const wk = RAW_DATA.find(r => r.id === l.workoutId);
+          const wk = findWorkout(l.workoutId);
           return wk ? wk.focus : null;
         }).filter(Boolean);
         const recentIds = sortedLogs.slice(0, 5).map(l => l.workoutId);
@@ -3246,7 +3502,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
             </button>
           </div>
           {recentLogs.map((log, idx) => {
-            const w = RAW_DATA.find(r => r.id === log.workoutId);
+            const w = findWorkout(log.workoutId);
             if (!w) return null;
             const resultStr = formatLogResult(log);
             const timeAgo = (() => {
@@ -3341,7 +3597,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
 // ═══════════════════════════════════════════════════════════════
 // LIBRARY SCREEN
 // ═══════════════════════════════════════════════════════════════
-function LibraryScreen({ workouts, filters, setFilters, showFilters, setShowFilters, onSelect, activeFilterCount, excludedMovements, setExcludedMovements, showExclusions, setShowExclusions, logs, diffOverrides, favs, onToggleFav }) {
+function LibraryScreen({ workouts, filters, setFilters, showFilters, setShowFilters, onSelect, activeFilterCount, excludedMovements, setExcludedMovements, showExclusions, setShowExclusions, logs, diffOverrides, favs, onToggleFav, onCreateNew }) {
   const [durationFilter, setDurationFilter] = useState(null);
   const [sortBy, setSortBy] = useState("id");
   const [showFavsOnly, setShowFavsOnly] = useState(false);
@@ -3368,7 +3624,7 @@ function LibraryScreen({ workouts, filters, setFilters, showFilters, setShowFilt
   const toggleFilter = (key, value) => {
     setFilters(prev => ({...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value]}));
   };
-  const clearFilters = () => { setFilters({ equipment: [], rating: [], format: [], focus: [], search: "" }); setExcludedMovements([]); setDurationFilter(null); };
+  const clearFilters = () => { setFilters({ equipment: [], rating: [], format: [], focus: [], search: "", mine: false }); setExcludedMovements([]); setDurationFilter(null); };
   const toggleExclusion = (movement) => {
     setExcludedMovements(prev => prev.includes(movement) ? prev.filter(m => m !== movement) : [...prev, movement]);
   };
@@ -3406,11 +3662,20 @@ function LibraryScreen({ workouts, filters, setFilters, showFilters, setShowFilt
 
       {/* ── Category filter chips (horizontal scroll) ── */}
       <div className="scroll-hide" style={{display: "flex", gap: 8, overflowX: "auto", padding: "0 20px 12px"}}>
+        <button onClick={onCreateNew} style={{
+          padding: "8px 16px", borderRadius: DS.radius.pill, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+          background: DS.colors.green + "20", border: `1px solid ${DS.colors.green}`, color: DS.colors.green, fontFamily: DS.font.body,
+        }}>+ Create</button>
+        <button onClick={() => setFilters(prev => ({ ...prev, mine: !prev.mine }))} style={{
+          padding: "8px 16px", borderRadius: DS.radius.pill, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+          background: filters.mine ? "#8b5cf6" : DS.colors.surface, border: `1px solid ${filters.mine ? "#8b5cf6" : DS.colors.border}`,
+          color: filters.mine ? "#fff" : DS.colors.textSub, fontFamily: DS.font.body,
+        }}>My Workouts</button>
         {["All Workouts", ...ALL_EQUIPMENT, ...ALL_FOCUSES.slice(0, 3)].map((cat, i) => {
           const isAll = cat === "All Workouts";
           const isEquip = ALL_EQUIPMENT.includes(cat);
           const isFocus = ALL_FOCUSES.includes(cat);
-          const active = isAll ? (filters.equipment.length === 0 && filters.focus.length === 0) : isEquip ? filters.equipment.includes(cat) : filters.focus.includes(cat);
+          const active = isAll ? (filters.equipment.length === 0 && filters.focus.length === 0 && !filters.mine) : isEquip ? filters.equipment.includes(cat) : filters.focus.includes(cat);
           return (
             <button key={cat} onClick={() => {
               if (isAll) clearFilters();
@@ -3583,7 +3848,8 @@ function LibraryScreen({ workouts, filters, setFilters, showFilters, setShowFilt
                 }}>
                   <div style={{display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8}}>
                     <div style={{display: "flex", alignItems: "center", gap: 8}}>
-                      <div style={{fontFamily: DS.font.display, fontSize: 22, color: "#fff", letterSpacing: 1}}>#{w.id}</div>
+                      <div style={{fontFamily: DS.font.display, fontSize: 22, color: "#fff", letterSpacing: 1}}>{w.custom ? w.name : `#${w.id}`}</div>
+                      {w.custom && <span style={{fontSize: 9, fontWeight: 800, color: "#8b5cf6", background: "#8b5cf620", border: "1px solid #8b5cf650", borderRadius: DS.radius.pill, padding: "2px 7px", letterSpacing: 1}}>MINE</span>}
                       {favs && favs.includes(w.id) && <Icon name="heart" size={14} color="#ef4444" />}
                       {(() => {
                         const wLogs = logs ? logs.filter(l => l.workoutId === w.id) : [];
@@ -3647,7 +3913,9 @@ function FilterSection({ title, items, selected, onToggle, colors }) {
 // ═══════════════════════════════════════════════════════════════
 // WORKOUT DETAIL (with START WORKOUT button + tappable exercises)
 // ═══════════════════════════════════════════════════════════════
-function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout, logs, diffOverrides, onEditLog, fontSizeKey, isFav, onToggleFav }) {
+function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout, logs, diffOverrides, onEditLog, fontSizeKey, isFav, onToggleFav, onEditCustom, onDeleteCustom }) {
+  const [confirmDeleteCustom, setConfirmDeleteCustom] = useState(false);
+  const customLogsCount = w.custom ? logs.filter(l => l.workoutId === w.id).length : 0;
   const contentFontSize = (FONT_SIZES[fontSizeKey] || FONT_SIZES.normal).base;
   // Customization state — loads from localStorage, falls back to original
   const [customRating, setCustomRating] = useState(() => getCustomization(w.id, "rating", w.rating));
@@ -3739,7 +4007,8 @@ function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout
 
         {/* Workout ID + fav + rating */}
         <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 14}}>
-          <div style={{fontFamily: DS.font.display, fontSize: 42, color: "#fff", letterSpacing: 1, lineHeight: 1}}>WOD #{w.id}</div>
+          <div style={{fontFamily: DS.font.display, fontSize: w.custom ? 32 : 42, color: "#fff", letterSpacing: 1, lineHeight: 1}}>{w.custom ? w.name : `WOD #${w.id}`}</div>
+          {w.custom && <span style={{fontSize: 10, fontWeight: 800, color: "#8b5cf6", background: "#8b5cf620", border: "1px solid #8b5cf650", borderRadius: DS.radius.pill, padding: "3px 8px", letterSpacing: 1}}>MINE</span>}
           <button onClick={onToggleFav} style={{
             background: isFav ? "#ef444418" : "none", border: `1px solid ${isFav ? "#ef4444" : DS.colors.border}`,
             borderRadius: DS.radius.md, padding: "6px 8px", cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center",
@@ -3747,6 +4016,23 @@ function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout
             <Icon name="heart" size={18} color={isFav ? "#ef4444" : DS.colors.textMuted} strokeWidth={isFav ? 2.5 : 1.5} />
           </button>
         </div>
+        {/* Custom workout controls */}
+        {w.custom && (
+          <div style={{display: "flex", gap: 8, marginBottom: 14}}>
+            <button onClick={onEditCustom} style={{flex: 1, background: "#8b5cf615", border: "1px solid #8b5cf650", borderRadius: 10, padding: "10px", color: "#8b5cf6", fontSize: 13, fontWeight: 700, cursor: "pointer"}}>{"✏️"} Edit</button>
+            <button onClick={() => setConfirmDeleteCustom(true)} style={{flex: 1, background: "#ef444410", border: "1px solid #ef444440", borderRadius: 10, padding: "10px", color: "#ef4444", fontSize: 13, fontWeight: 700, cursor: "pointer"}}>{"🗑"} Delete</button>
+          </div>
+        )}
+        {confirmDeleteCustom && (
+          <div style={{background: "#1a0a0a", border: "1px solid #ef444440", borderRadius: 12, padding: 14, marginBottom: 14}}>
+            <div style={{fontSize: 13, color: "#ef4444", marginBottom: 4, fontWeight: 700}}>Delete "{w.name}"?</div>
+            {customLogsCount > 0 && <div style={{fontSize: 12, color: "#888", marginBottom: 8}}>Your {customLogsCount} logged session{customLogsCount > 1 ? "s" : ""} will stay in History.</div>}
+            <div style={{display: "flex", gap: 8}}>
+              <button onClick={() => setConfirmDeleteCustom(false)} style={{flex: 1, background: "#222", border: "1px solid #444", borderRadius: 8, padding: "8px", color: "#999", fontSize: 12, cursor: "pointer"}}>Cancel</button>
+              <button onClick={onDeleteCustom} style={{flex: 1, background: "#ef444425", border: "1px solid #ef4444", borderRadius: 8, padding: "8px", color: "#ef4444", fontSize: 12, fontWeight: 700, cursor: "pointer"}}>Delete</button>
+            </div>
+          </div>
+        )}
 
         {/* Stat bar — Duration, Equipment, Difficulty */}
         <div style={{display: "flex", gap: 0, marginBottom: 16, background: DS.colors.surface, borderRadius: DS.radius.lg, border: `1px solid ${DS.colors.border}`, overflow: "hidden"}}>

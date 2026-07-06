@@ -101,5 +101,6 @@ export function buildBackup(appVersion, injectedStore) {
     customizations: loadData("customizations", {}, injectedStore),
     settings: loadData("settings", {}, injectedStore),
     favourites: loadData("favourites", [], injectedStore),
+    myWorkouts: loadData("myWorkouts", [], injectedStore),
   };
 }
