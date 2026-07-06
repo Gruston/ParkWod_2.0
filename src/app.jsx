@@ -6,6 +6,15 @@ import { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText,
 import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
 import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary } from "./engine/timer.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
+import { WORKOUT_BLOCKS } from "./data/blocks.js";
+
+// Declared structure wins: use the stored, reviewed blocks when the text is
+// unmodified; fall back to live parsing only for user-customised text.
+function getWorkoutBlocks(workout, field, liveText) {
+  const stored = WORKOUT_BLOCKS[workout.id];
+  if (stored && stored[field] && liveText === workout[field]) return stored[field];
+  return parseBlocks(liveText);
+}
 
     const { useState, useMemo, useCallback, useEffect, useRef } = React;
 
@@ -1007,7 +1016,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
     const p = [];
     if (warmupText) p.push({ type: "warmup", title: "WARMUP", icon: "\u{1F525}", color: "#eab308", content: warmupText, timer: { type: "stopwatch", label: "Warmup" } });
     
-    const blocks = parseBlocks(workoutText);
+    const blocks = getWorkoutBlocks(workout, "workout", workoutText);
     blocks.forEach((block, i) => {
       p.push({
         type: "workout",
@@ -1016,9 +1025,9 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
         content: block.content, timer: block.timer,
       });
     });
-    
+
     if (coreText) {
-      const coreBlocks = parseBlocks(coreText);
+      const coreBlocks = getWorkoutBlocks(workout, "core", coreText);
       coreBlocks.forEach((block, i) => {
         p.push({
           type: "core",
@@ -1030,7 +1039,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
     }
     p.push({ type: "done", title: "DONE", icon: "\u{1F3C6}", color: "#3ddc84", content: "", timer: null });
     return p;
-  }, [warmupText, workoutText, coreText]);
+  }, [workout, warmupText, workoutText, coreText]);
 
   const [phaseIdx, setPhaseIdx] = useState(0);
   const [started, setStarted] = useState(false);
@@ -3599,13 +3608,13 @@ function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout
         {(() => {
           const phases = [];
           if (customWarmup || w.warmup) phases.push({ label: "Warmup", color: "#eab308", icon: "fire" });
-          const blocks = parseBlocks(customWorkout || w.workout);
+          const blocks = getWorkoutBlocks(w, "workout", customWorkout || w.workout);
           blocks.forEach((b, i) => {
             const label = b.timer?.label || (blocks.length > 1 ? `Part ${i+1}` : "Workout");
             phases.push({ label, color: DS.colors.orange, icon: "zap" });
           });
           if (customCore || w.core) {
-            const coreBlocks = parseBlocks(customCore || w.core);
+            const coreBlocks = getWorkoutBlocks(w, "core", customCore || w.core);
             coreBlocks.forEach(() => phases.push({ label: "Core", color: "#8b5cf6", icon: "target" }));
           }
           return phases.length > 1 ? (
