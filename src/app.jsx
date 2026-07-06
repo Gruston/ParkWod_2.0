@@ -4,6 +4,7 @@ import { CATEGORY_PATTERNS, EXERCISE_INFO } from "./data/exercises.js";
 import { RAW_DATA, DIFFICULTY_COLORS, EQUIPMENT_ICONS, ALL_EQUIPMENT, ALL_RATINGS, ALL_FORMATS, ALL_FOCUSES, ALL_MOVEMENTS, ALL_WORKOUT_MOVEMENTS } from "./data/workouts.js";
 import { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech } from "./engine/voice.js";
 import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
+import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary } from "./engine/timer.js";
 
     const { useState, useMemo, useCallback, useEffect, useRef } = React;
 
@@ -498,24 +499,48 @@ function fmt(secs) {
 // TIMER HOOK
 // ═══════════════════════════════════════════════════════════════
 function useTimer() {
+  // Timestamp-based: elapsed is derived from wall-clock time, so it stays
+  // correct even when the browser throttles/suspends intervals (screen lock,
+  // app backgrounded). The interval only refreshes the display.
+  const stateRef = useRef(createTimerState());
   const [elapsed, setElapsed] = useState(0);
-  const [running, setRunning] = useState(false);
-  const ref = useRef(null);
-  
+  const [running, setRunningState] = useState(false);
+
+  const sync = useCallback(() => {
+    setElapsed(computeElapsed(stateRef.current, Date.now()));
+  }, []);
+
   useEffect(() => {
-    if (running) {
-      ref.current = setInterval(() => setElapsed(e => e + 1), 1000);
-    } else {
-      clearInterval(ref.current);
-    }
-    return () => clearInterval(ref.current);
-  }, [running]);
-  
-  const reset = useCallback(() => { setElapsed(0); setRunning(false); }, []);
-  const start = useCallback(() => setRunning(true), []);
-  const pause = useCallback(() => setRunning(false), []);
-  const toggle = useCallback(() => setRunning(r => !r), []);
-  
+    if (!running) return;
+    const id = setInterval(sync, 250); // 250ms so displayed seconds never visibly stall
+    const onVisibility = () => { if (!document.hidden) sync(); }; // resync instantly on unlock
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [running, sync]);
+
+  const start = useCallback(() => {
+    stateRef.current = timerStart(stateRef.current, Date.now());
+    setRunningState(true);
+    setElapsed(computeElapsed(stateRef.current, Date.now()));
+  }, []);
+  const pause = useCallback(() => {
+    stateRef.current = timerPause(stateRef.current, Date.now());
+    setRunningState(false);
+    setElapsed(computeElapsed(stateRef.current, Date.now()));
+  }, []);
+  const reset = useCallback(() => {
+    stateRef.current = createTimerState();
+    setRunningState(false);
+    setElapsed(0);
+  }, []);
+  const toggle = useCallback(() => {
+    if (timerIsRunning(stateRef.current)) pause(); else start();
+  }, [start, pause]);
+  const setRunning = useCallback((v) => {
+    const target = typeof v === "function" ? v(timerIsRunning(stateRef.current)) : v;
+    if (target) start(); else pause();
+  }, [start, pause]);
+
   return { elapsed, running, start, pause, toggle, reset, setRunning };
 }
 
@@ -560,12 +585,12 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
     if (cfg.type === "countdown") {
       const rem = cfg.totalSeconds - elapsed;
       if (doBeep && rem >= 1 && rem <= 3) { beep321(); tryVibrate(100); }
-      if (doBeep && rem === 0) { beepFinish(); tryVibrate([200,100,200,100,400]); }
+      // crossing-safe: fires even if the clock jumps past the boundary (phone unlock)
+      if (doBeep && prev < cfg.totalSeconds && elapsed >= cfg.totalSeconds) { beepFinish(); tryVibrate([200,100,200,100,400]); }
     }
     if (cfg.type === "emom") {
       const currentMin = Math.floor(elapsed / 60) + 1;
-      const prevMin = Math.floor(prev / 60) + 1;
-      if (elapsed > 0 && elapsed % 60 === 0) {
+      if (crossedBoundary(prev, elapsed, 60, 60)) {
         if (doBeep) { beepMinute(); tryVibrate(200); }
         // Voice: announce round and exercise at minute change
         if (cfg.exercises) {
@@ -578,7 +603,7 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       }
       const rem = cfg.totalSeconds - elapsed;
       if (doBeep && rem >= 1 && rem <= 3) beep321();
-      if (doBeep && rem === 0) { beepFinish(); tryVibrate([200,100,200,100,400]); }
+      if (doBeep && prev < cfg.totalSeconds && elapsed >= cfg.totalSeconds) { beepFinish(); tryVibrate([200,100,200,100,400]); }
     }
     if (cfg.type === "tabata") {
       const cycleLen = cfg.workSeconds + cfg.restSeconds;
@@ -590,8 +615,8 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       const nextStIdx = stationIdx + (round === cfg.rounds ? 1 : 0);
       const nextExName = cfg.exercises && cfg.exercises[nextStIdx] ? cfg.exercises[nextStIdx] : null;
       
-      // Start of WORK period
-      if (withinCycle === 0 && elapsed > 0) {
+      // Start of WORK period (crossing-safe across clock jumps)
+      if (crossedBoundary(prev, elapsed, cycleLen, cycleLen)) {
         if (doBeep) { beepWork(); tryVibrate([100,50,100,50,100]); }
         const voiceMsg = exName ? `Round ${round} of ${cfg.rounds}. ${exName}` : `Round ${round} of ${cfg.rounds}`;
         speakText(voiceMsg, voiceEnabled, audio);
@@ -601,8 +626,8 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
         const voiceMsg = exName ? `Round 1 of ${cfg.rounds}. ${exName}` : `Round 1`;
         speakText(voiceMsg, voiceEnabled, audio);
       }
-      // Start of REST period
-      if (withinCycle === cfg.workSeconds) {
+      // Start of REST period (crossing-safe across clock jumps)
+      if (crossedBoundary(prev, elapsed, cycleLen, cfg.workSeconds)) {
         if (doBeep) { beepRest(); tryVibrate(200); }
         // Voice: announce next exercise during rest
         if (round === cfg.rounds && nextExName) {
@@ -621,19 +646,21 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       const withinRound = elapsed % roundLen;
       const roundIdx = Math.floor(elapsed / roundLen);
       const stationIdx = Math.floor(withinRound / stSec);
-      if (withinRound > 0 && withinRound % stSec === 0 && withinRound < stSec * cfg.stations) {
+      // Station entry (crossing-safe): fire when the station segment identity changes
+      const stationKey = (e) => { const wr = e % roundLen; return Math.floor(e / roundLen) * 1000 + (wr < stSec * cfg.stations ? Math.floor(wr / stSec) : 999); };
+      if (stationKey(elapsed) !== stationKey(prev) && withinRound < stSec * cfg.stations && withinRound >= stSec) {
         if (doBeep) { beepMinute(); tryVibrate(200); }
         // Voice: announce station exercise
         const exName = cfg.exercises && cfg.exercises[stationIdx] ? cfg.exercises[stationIdx] : `Station ${stationIdx + 1}`;
         speakText(`${exName}. Round ${roundIdx + 1}`, voiceEnabled, audio);
       }
-      if (withinRound === stSec * cfg.stations) {
+      if (crossedBoundary(prev, elapsed, roundLen, stSec * cfg.stations)) {
         if (doBeep) { beepRest(); tryVibrate(300); }
         speakText(`Rest`, voiceEnabled, audio);
       }
     }
     if (cfg.type === "deathby") {
-      if (elapsed > 0 && elapsed % 60 === 0) { if (doBeep) { beepMinute(); tryVibrate(200); }
+      if (crossedBoundary(prev, elapsed, 60, 60)) { if (doBeep) { beepMinute(); tryVibrate(200); }
         const currentMin = Math.floor(elapsed / 60) + 1;
         speakText(`Minute ${currentMin}. ${currentMin} reps`, voiceEnabled, audio);
       }
@@ -648,22 +675,25 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       const exIdx = isRest ? numEx - 1 : Math.floor(withinRound / cfg.exerciseSeconds);
       const roundIdx = Math.floor(elapsed / roundLen);
       const exName = cfg.exercises && cfg.exercises[exIdx] ? cfg.exercises[exIdx] : null;
-      // Completion beep
-      if (doBeep && elapsed === cfg.totalSeconds) { beepFinish(); tryVibrate([200,100,200,100,400]); }
-      // Start of rest period
-      if (cfg.restSeconds > 0 && withinRound === workPeriod && elapsed > 0) {
+      // Completion beep (crossing-safe)
+      if (doBeep && prev < cfg.totalSeconds && elapsed >= cfg.totalSeconds) { beepFinish(); tryVibrate([200,100,200,100,400]); }
+      // Start of rest period (crossing-safe)
+      if (cfg.restSeconds > 0 && crossedBoundary(prev, elapsed, roundLen, workPeriod)) {
         if (doBeep) { beepRest(); tryVibrate(200); }
         speakText(`Rest`, voiceEnabled, audio);
       }
-      // Start of a new exercise within the round (withinEx === 0 and not in rest)
-      if (!isRest && withinEx === 0 && elapsed > 0) {
+      // Start of a new exercise within the round (crossing-safe: fire when the
+      // exercise segment identity changes; announces the CURRENT exercise once)
+      const exKey = (e) => { const wr = e % roundLen; return wr >= workPeriod ? -1 : Math.floor(e / roundLen) * 1000 + Math.floor(wr / cfg.exerciseSeconds); };
+      if (!isRest && elapsed > 0 && exKey(elapsed) !== exKey(prev)) {
         if (doBeep) { beepWork(); tryVibrate([100,50,100]); }
         const isRoundStart = exIdx === 0;
         const msg = isRoundStart ? `Round ${roundIdx + 1}. ${exName || ''}` : (exName || '');
         speakText(msg, voiceEnabled, audio);
       }
-      // Very first tick — announce round 1 and first exercise
-      if (elapsed === 1 && prev === 0 && exName) {
+      // Very first tick — announce round 1 and first exercise (skip if a clock
+      // jump already fired the segment-change branch above)
+      if (prev === 0 && elapsed >= 1 && exName && exKey(elapsed) === exKey(prev)) {
         speakText(`Round 1. ${exName}`, voiceEnabled, audio);
       }
       // Last 3 seconds of each exercise period or rest period
@@ -1037,6 +1067,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   const [restTimerLeft, setRestTimerLeft] = useState(0);
   const [showRestPicker, setShowRestPicker] = useState(false);
   const restIntervalRef = useRef(null);
+  const restEndsAtRef = useRef(0); // wall-clock deadline for the rest timer
   
   // Font size from settings
   const fontSizeKey = settings.fontSize || "normal";
@@ -1092,34 +1123,43 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   // Cleanup countdown and speech on unmount
   useEffect(() => () => { clearInterval(countdownRef.current); clearInterval(restIntervalRef.current); cancelSpeech(); }, []);
 
-  // Rest timer countdown effect
+  // Rest timer countdown effect — deadline-based so it stays correct when the
+  // browser throttles intervals (phone locked during a rest). Remaining time is
+  // computed from a wall-clock deadline; if the rest expired while the screen
+  // was off, it finishes immediately on unlock instead of silently drifting.
   useEffect(() => {
     if (!restTimerActive) { clearInterval(restIntervalRef.current); return; }
-    restIntervalRef.current = setInterval(() => {
-      setRestTimerLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(restIntervalRef.current);
-          setRestTimerActive(false);
-          // Beep + vibrate when rest is over
-          try {
-            const ac = new (window.AudioContext || window.webkitAudioContext)();
-            [0, 200, 400].forEach(delay => { const o = ac.createOscillator(); const g = ac.createGain(); o.connect(g); g.connect(ac.destination); o.frequency.value = 880; g.gain.value = 0.3; o.start(ac.currentTime + delay/1000); o.stop(ac.currentTime + delay/1000 + 0.15); });
-          } catch(e) {}
-          if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 200]);
-          speakText("Rest over. Let's go!", voiceEnabled, audioEnabled);
-          return 0;
-        }
-        // Beep at 3,2,1
-        if (prev <= 4 && prev > 1 && audioEnabled) {
+    let prevLeft = Math.max(0, Math.ceil((restEndsAtRef.current - Date.now()) / 1000));
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((restEndsAtRef.current - Date.now()) / 1000));
+      if (left !== prevLeft) {
+        // Beep at 3,2,1 (once per second change, crossing-safe)
+        if (left >= 1 && left <= 3 && audioEnabled) {
           try { const ac = new (window.AudioContext || window.webkitAudioContext)(); const o = ac.createOscillator(); const g = ac.createGain(); o.connect(g); g.connect(ac.destination); o.frequency.value = 660; g.gain.value = 0.2; o.start(); o.stop(ac.currentTime + 0.1); } catch(e) {}
         }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(restIntervalRef.current);
+        prevLeft = left;
+        setRestTimerLeft(left);
+      }
+      if (left <= 0) {
+        clearInterval(restIntervalRef.current);
+        setRestTimerActive(false);
+        // Beep + vibrate when rest is over
+        try {
+          const ac = new (window.AudioContext || window.webkitAudioContext)();
+          [0, 200, 400].forEach(delay => { const o = ac.createOscillator(); const g = ac.createGain(); o.connect(g); g.connect(ac.destination); o.frequency.value = 880; g.gain.value = 0.3; o.start(ac.currentTime + delay/1000); o.stop(ac.currentTime + delay/1000 + 0.15); });
+        } catch(e) {}
+        if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 200]);
+        speakText("Rest over. Let's go!", voiceEnabled, audioEnabled);
+      }
+    };
+    restIntervalRef.current = setInterval(tick, 250);
+    const onVisibility = () => { if (!document.hidden) tick(); }; // instant resync on unlock
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { clearInterval(restIntervalRef.current); document.removeEventListener("visibilitychange", onVisibility); };
   }, [restTimerActive, audioEnabled, voiceEnabled]);
 
   const startRestTimer = (seconds) => {
+    restEndsAtRef.current = Date.now() + seconds * 1000;
     setRestTimerDuration(seconds);
     setRestTimerLeft(seconds);
     setRestTimerActive(true);
