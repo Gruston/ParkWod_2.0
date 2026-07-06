@@ -5,6 +5,7 @@ import { RAW_DATA, DIFFICULTY_COLORS, EQUIPMENT_ICONS, ALL_EQUIPMENT, ALL_RATING
 import { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech } from "./engine/voice.js";
 import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
 import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary } from "./engine/timer.js";
+import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 
     const { useState, useMemo, useCallback, useEffect, useRef } = React;
 
@@ -99,7 +100,6 @@ const Icon = ({ name, size = 20, color = "currentColor", strokeWidth = 2 }) => {
 // ═══════════════════════════════════════════════════════════════
 // APP SETTINGS — font size, voice, outdoor mode, audio default
 // ═══════════════════════════════════════════════════════════════
-const SETTINGS_KEY = "parkwod:settings";
 const FONT_SIZES = {
   small: { label: "Small", base: 14, timer: 58, exercise: 16, sample: "Compact view" },
   normal: { label: "Normal", base: 16, timer: 64, exercise: 20, sample: "Default size" },
@@ -110,11 +110,10 @@ const FONT_SIZES = {
 const DEFAULT_SETTINGS = { fontSize: "normal", voiceEnabled: false, outdoorMode: false, audioDefault: true, displayName: "" };
 
 function loadSettings() {
-  try { const raw = localStorage.getItem(SETTINGS_KEY); return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_SETTINGS }; }
-  catch { return { ...DEFAULT_SETTINGS }; }
+  return { ...DEFAULT_SETTINGS, ...loadData("settings", {}) };
 }
 function persistSettings(s) {
-  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
+  saveData("settings", s);
 }
 
 function useSettings() {
@@ -150,12 +149,12 @@ function clearWorkoutRecovery() {
 // ═══════════════════════════════════════════════════════════════
 // FAVOURITES — simple set of workout IDs
 // ═══════════════════════════════════════════════════════════════
-const FAVOURITES_KEY = "parkwod:favourites";
 function loadFavourites() {
-  try { const raw = localStorage.getItem(FAVOURITES_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+  const f = loadData("favourites", []);
+  return Array.isArray(f) ? f : [];
 }
 function saveFavourites(favs) {
-  try { localStorage.setItem(FAVOURITES_KEY, JSON.stringify(favs)); } catch(e) {}
+  saveData("favourites", favs);
 }
 function useFavourites() {
   const [favs, setFavs] = useState(() => loadFavourites());
@@ -177,26 +176,17 @@ function useFavourites() {
 // ═══════════════════════════════════════════════════════════════
 // WORKOUT CUSTOMIZATION STORAGE  
 // ═══════════════════════════════════════════════════════════════
-const CUSTOM_STORAGE_KEY = "parkwod_customizations";
-
 function getStoredCustomizations() {
-  try {
-    const data = localStorage.getItem(CUSTOM_STORAGE_KEY);
-    if (!data) return {};
-    const parsed = JSON.parse(data);
-    return (typeof parsed === 'object' && parsed !== null) ? parsed : {};
-  } catch (e) { return {}; }
+  const parsed = loadData("customizations", {});
+  return (typeof parsed === 'object' && parsed !== null) ? parsed : {};
 }
 
 function saveCustomization(workoutId, field, value) {
-  try {
-    const data = getStoredCustomizations();
-    const id = String(workoutId);
-    if (!data[id]) data[id] = {};
-    data[id][field] = value;
-    localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(data));
-    return true;
-  } catch (e) { return false; }
+  const data = getStoredCustomizations();
+  const id = String(workoutId);
+  if (!data[id]) data[id] = {};
+  data[id][field] = value;
+  return saveData("customizations", data);
 }
 
 function getCustomization(workoutId, field, defaultValue) {
@@ -206,33 +196,27 @@ function getCustomization(workoutId, field, defaultValue) {
 }
 
 function clearCustomization(workoutId, field) {
-  try {
-    const data = getStoredCustomizations();
-    const id = String(workoutId);
-    if (!data[id]) return;
-    delete data[id][field];
-    if (Object.keys(data[id]).length === 0) delete data[id];
-    localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(data));
-  } catch (e) {}
+  const data = getStoredCustomizations();
+  const id = String(workoutId);
+  if (!data[id]) return;
+  delete data[id][field];
+  if (Object.keys(data[id]).length === 0) delete data[id];
+  saveData("customizations", data);
 }
 
 async function loadLogs() {
-  try {
-    const raw = localStorage.getItem("parkwod-logs");
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+  const l = loadData("logs", []);
+  return Array.isArray(l) ? l : [];
 }
 async function saveLogs(logs) {
-  try { localStorage.setItem("parkwod-logs", JSON.stringify(logs)); } catch (e) { console.error("Save logs failed:", e); }
+  saveData("logs", logs);
 }
 async function loadDiffOverrides() {
-  try {
-    const raw = localStorage.getItem("parkwod-diff-overrides");
-    return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+  const ov = loadData("diffOverrides", {});
+  return (typeof ov === 'object' && ov !== null) ? ov : {};
 }
 async function saveDiffOverrides(ov) {
-  try { localStorage.setItem("parkwod-diff-overrides", JSON.stringify(ov)); } catch (e) { console.error("Save overrides failed:", e); }
+  saveData("diffOverrides", ov);
 }
 
 function useWorkoutLogs() {
@@ -2239,6 +2223,67 @@ function WorkoutLogHistory({ workoutId, logs, diffOverrides, onEditLog }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// BACKUP EXPORT + APP META (last backup tracking)
+// ═══════════════════════════════════════════════════════════════
+function getMeta() { const m = loadData("meta", {}); return (m && typeof m === "object") ? m : {}; }
+function setMeta(patch) { saveData("meta", { ...getMeta(), ...patch }); }
+
+// One-tap export: share sheet where supported (Android Chrome -> email/Drive),
+// download fallback elsewhere. Returns true if the backup left the app.
+async function exportBackup() {
+  const json = JSON.stringify(buildBackup(__APP_VERSION__), null, 2);
+  const filename = `parkwod-backup-${new Date().toISOString().split("T")[0]}.json`;
+  try {
+    const file = new File([json], filename, { type: "application/json" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: "PARK WOD backup" });
+      setMeta({ lastBackupAt: Date.now() });
+      return true;
+    }
+  } catch (e) {
+    if (e && e.name === "AbortError") return false; // user cancelled the share sheet
+  }
+  try {
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    a.click(); URL.revokeObjectURL(url);
+    setMeta({ lastBackupAt: Date.now() });
+    return true;
+  } catch (e) { console.error("Export failed:", e); return false; }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ERROR BOUNDARY — no more white screens
+// ═══════════════════════════════════════════════════════════════
+// Deliberately styled with plain values (no DS/sty references) so it can
+// render even if the design system itself is what broke.
+function CrashScreen({ error }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#0a0a15", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center", fontFamily: "sans-serif" }}>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>{"⚠️"}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color: "#ff8a3a", marginBottom: 8 }}>Something went wrong</div>
+      <div style={{ fontSize: 14, color: "#888", marginBottom: 4 }}>Your data is safe. If a workout was running, you can resume it after reloading.</div>
+      <div style={{ fontSize: 11, color: "#555", marginBottom: 24, maxWidth: 300, overflowWrap: "break-word" }}>{String(error && (error.message || error)).slice(0, 200)}</div>
+      <button onClick={() => window.location.reload()} style={{ background: "#ff8a3a", color: "#fff", border: "none", borderRadius: 14, padding: "14px 32px", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
+        Reload App
+      </button>
+    </div>
+  );
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { try { console.error("App crash:", error, info); } catch {} }
+  render() {
+    if (this.state.error) return <CrashScreen error={this.state.error} />;
+    return this.props.children;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // APP COMPONENT
 // ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
@@ -2250,11 +2295,11 @@ function SettingsScreen({ settings, onUpdate }) {
 
   const handleClearAll = () => {
     try {
-      localStorage.removeItem("parkwod-logs");
-      localStorage.removeItem("parkwod-diff-overrides");
-      localStorage.removeItem(CUSTOM_STORAGE_KEY);
+      // Clear live (v1) data AND the frozen legacy snapshots — this is the
+      // user explicitly asking for everything to go.
+      ["logs", "diffOverrides", "customizations", "settings", "favourites"].forEach(removeData);
+      Object.values(LEGACY_KEYS).forEach(k => localStorage.removeItem(k));
       localStorage.removeItem(RECOVERY_KEY);
-      localStorage.removeItem(SETTINGS_KEY);
       setShowClearConfirm(false);
       window.location.reload();
     } catch(e) {}
@@ -2361,24 +2406,7 @@ function SettingsScreen({ settings, onUpdate }) {
       {/* Export / Backup */}
       <div style={{marginBottom: 24}}>
         <div style={sty.sectionTitle}>Backup Data</div>
-        <button onClick={() => {
-          try {
-            const backup = {
-              exportDate: new Date().toISOString(),
-              version: __APP_VERSION__,
-              logs: JSON.parse(localStorage.getItem("parkwod-logs") || "[]"),
-              diffOverrides: JSON.parse(localStorage.getItem("parkwod-diff-overrides") || "{}"),
-              customizations: JSON.parse(localStorage.getItem(CUSTOM_STORAGE_KEY) || "{}"),
-              settings: JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
-              favourites: JSON.parse(localStorage.getItem(FAVOURITES_KEY) || "[]"),
-            };
-            const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url; a.download = `parkwod-backup-${new Date().toISOString().split("T")[0]}.json`;
-            a.click(); URL.revokeObjectURL(url);
-          } catch(e) { console.error("Export failed:", e); }
-        }} style={{
+        <button onClick={() => { exportBackup(); }} style={{
           width: "100%", padding: "14px 16px", borderRadius: 12, cursor: "pointer",
           background: "#3ddc8415", border: "1px solid #3ddc8450", color: "#3ddc84", fontSize: 14, fontWeight: 700,
         }}>{"\u{1F4BE}"} Export Backup (JSON)</button>
@@ -2392,11 +2420,11 @@ function SettingsScreen({ settings, onUpdate }) {
             try {
               const data = JSON.parse(ev.target.result);
               let restored = 0;
-              if (data.logs && Array.isArray(data.logs)) { localStorage.setItem("parkwod-logs", JSON.stringify(data.logs)); restored++; }
-              if (data.diffOverrides && typeof data.diffOverrides === "object") { localStorage.setItem("parkwod-diff-overrides", JSON.stringify(data.diffOverrides)); restored++; }
-              if (data.customizations && typeof data.customizations === "object") { localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(data.customizations)); restored++; }
-              if (data.settings && typeof data.settings === "object") { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data.settings)); restored++; }
-              if (data.favourites && Array.isArray(data.favourites)) { localStorage.setItem(FAVOURITES_KEY, JSON.stringify(data.favourites)); restored++; }
+              if (data.logs && Array.isArray(data.logs)) { saveData("logs", data.logs); restored++; }
+              if (data.diffOverrides && typeof data.diffOverrides === "object") { saveData("diffOverrides", data.diffOverrides); restored++; }
+              if (data.customizations && typeof data.customizations === "object") { saveData("customizations", data.customizations); restored++; }
+              if (data.settings && typeof data.settings === "object") { saveData("settings", data.settings); restored++; }
+              if (data.favourites && Array.isArray(data.favourites)) { saveData("favourites", data.favourites); restored++; }
               alert(`Backup restored! (${restored} sections imported${data.logs ? `, ${data.logs.length} logs` : ""})\n\nThe page will now reload.`);
               window.location.reload();
             } catch(err) { alert("Invalid backup file. Please select a valid PARK WOD backup JSON file."); }
@@ -2453,9 +2481,38 @@ function useUpdateReady() {
   return ready;
 }
 
+// Migrate legacy storage to versioned keys before anything reads data.
+// Copy-only: legacy keys stay untouched as a rollback-safe snapshot.
+migrateIfNeeded();
+
 function App() {
   const [screenState, setScreenState] = useState("home");
   const updateReady = useUpdateReady();
+  const [storageError, setStorageError] = useState(false);
+  const [backupNudge, setBackupNudge] = useState(false);
+
+  // Ask the browser to protect our storage from eviction (best-effort)
+  useEffect(() => {
+    try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(() => {}); } catch {}
+  }, []);
+
+  // Surface storage failures (quota full, private mode) — never silent
+  useEffect(() => {
+    const onStorageError = () => setStorageError(true);
+    window.addEventListener("parkwod:storage-error", onStorageError);
+    return () => window.removeEventListener("parkwod:storage-error", onStorageError);
+  }, []);
+
+  // Monthly backup nudge: only when there is history worth protecting and
+  // no backup (or dismissal) in the last 30 days
+  useEffect(() => {
+    const logs = loadData("logs", []);
+    if (!Array.isArray(logs) || logs.length === 0) return;
+    const meta = getMeta();
+    const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
+    const last = Math.max(meta.lastBackupAt || 0, meta.lastBackupPromptAt || 0);
+    if (Date.now() - last > MONTH_MS) setBackupNudge(true);
+  }, []);
   const [prevScreen, setPrevScreen] = useState("home");
   const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem("parkwod:welcomed"));
   const screen = screenState;
@@ -2711,6 +2768,36 @@ function App() {
               }}>Let's Go {"\u2192"}</button>
             </div>
           </div>
+        </div>
+      )}
+      {/* Storage failure warning — data may not be saving */}
+      {storageError && (
+        <div style={{
+          position: "fixed", top: "max(env(safe-area-inset-top), 8px)", left: 16, right: 16, zIndex: 950,
+          background: "#2a0f0f", border: "1px solid #ef4444", borderRadius: 14, padding: "12px 14px",
+          display: "flex", alignItems: "center", gap: 10, boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#ef4444" }}>Storage problem — data may not be saving</div>
+            <div style={{ fontSize: 11, color: "#aaa" }}>Your phone's storage may be full. Export a backup now to be safe.</div>
+          </div>
+          <button onClick={() => { exportBackup(); }} style={{ background: "#ef4444", color: "#fff", border: "none", borderRadius: 10, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Export</button>
+          <button onClick={() => setStorageError(false)} style={{ background: "none", border: "none", color: "#888", fontSize: 16, cursor: "pointer", padding: 4 }}>{"✕"}</button>
+        </div>
+      )}
+      {/* Monthly backup nudge */}
+      {backupNudge && !storageError && (
+        <div style={{
+          position: "fixed", bottom: 92, left: 16, right: 16, zIndex: 790,
+          background: "#111122", border: "1px solid #3ddc8450", borderRadius: 16, padding: "14px 16px",
+          display: "flex", alignItems: "center", gap: 12, boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#3ddc84" }}>Back up your workout history</div>
+            <div style={{ fontSize: 12, color: "#888" }}>Save a copy off this phone — takes one tap.</div>
+          </div>
+          <button onClick={async () => { const ok = await exportBackup(); if (ok) setBackupNudge(false); }} style={{ background: "#3ddc84", color: "#0a0a15", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>Export</button>
+          <button onClick={() => { setMeta({ lastBackupPromptAt: Date.now() }); setBackupNudge(false); }} style={{ background: "none", border: "none", color: "#888", fontSize: 16, cursor: "pointer", padding: 4 }}>{"✕"}</button>
         </div>
       )}
       {/* Update-ready banner — zIndex 800 sits below the workout overlay (900),
@@ -3702,7 +3789,8 @@ const sty = {
 };
 
 
-    // Mount the app
+    // Mount the app — wrapped in the error boundary so a crash shows a
+    // recoverable screen instead of going blank
     const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(React.createElement(App));
+    root.render(React.createElement(ErrorBoundary, null, React.createElement(App)));
   
