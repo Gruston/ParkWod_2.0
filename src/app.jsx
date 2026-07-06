@@ -2,7 +2,7 @@ import * as React from "react";
 import * as ReactDOM from "react-dom/client";
 import { CATEGORY_PATTERNS, EXERCISE_INFO } from "./data/exercises.js";
 import { RAW_DATA, DIFFICULTY_COLORS, EQUIPMENT_ICONS, ALL_EQUIPMENT, ALL_RATINGS, ALL_FORMATS, ALL_FOCUSES, ALL_MOVEMENTS, ALL_WORKOUT_MOVEMENTS } from "./data/workouts.js";
-import { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech } from "./engine/voice.js";
+import { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech, speakDuration } from "./engine/voice.js";
 import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
 import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary } from "./engine/timer.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
@@ -116,7 +116,7 @@ const FONT_SIZES = {
   xlarge: { label: "X-Large", base: 24, timer: 80, exercise: 28, sample: "Low vision friendly" },
   xxlarge: { label: "XXL", base: 28, timer: 90, exercise: 32, sample: "Maximum readability" },
 };
-const DEFAULT_SETTINGS = { fontSize: "normal", voiceEnabled: false, outdoorMode: false, audioDefault: true, displayName: "" };
+const DEFAULT_SETTINGS = { fontSize: "normal", voiceEnabled: false, outdoorMode: false, audioDefault: true, displayName: "", voiceHalfway: true, voiceFinalMinute: true, voiceNextPreview: true };
 
 function loadSettings() {
   return { ...DEFAULT_SETTINGS, ...loadData("settings", {}) };
@@ -543,7 +543,7 @@ function useTimer() {
 // ═══════════════════════════════════════════════════════════════
 // TIMER DISPLAY — shows format timer, current exercise, countdown
 // ═══════════════════════════════════════════════════════════════
-function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, outdoorMode, fontSizeKey }) {
+function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, outdoorMode, fontSizeKey, coach = {} }) {
   const cfg = config;
   const fs = FONT_SIZES[fontSizeKey] || FONT_SIZES.normal;
   const outdoor = outdoorMode;
@@ -578,11 +578,26 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
     if (cfg.type === "countdown") {
       const rem = cfg.totalSeconds - elapsed;
       if (doBeep && rem >= 1 && rem <= 3) { beep321(); tryVibrate(100); }
+      // Coaching: halfway call (blocks of 4+ min) and final-minute call (2+ min)
+      const half = Math.floor(cfg.totalSeconds / 2);
+      if (coach.halfway && cfg.totalSeconds >= 240 && prev < half && elapsed >= half) {
+        speakText(`Halfway. ${speakDuration(cfg.totalSeconds - half)} to go`, voiceEnabled, audio);
+      }
+      if (coach.finalMinute && cfg.totalSeconds >= 120 && prev < cfg.totalSeconds - 60 && elapsed >= cfg.totalSeconds - 60) {
+        speakText("One minute remaining", voiceEnabled, audio);
+      }
       // crossing-safe: fires even if the clock jumps past the boundary (phone unlock)
       if (doBeep && prev < cfg.totalSeconds && elapsed >= cfg.totalSeconds) { beepFinish(); tryVibrate([200,100,200,100,400]); }
     }
     if (cfg.type === "emom") {
       const currentMin = Math.floor(elapsed / 60) + 1;
+      // Coaching: halfway call — only for odd-minute EMOMs where the midpoint
+      // falls between minute marks (even ones collide with the minute
+      // announcement, which carries more information and wins)
+      const emomHalf = Math.floor(cfg.totalSeconds / 2);
+      if (coach.halfway && cfg.totalSeconds >= 240 && emomHalf % 60 !== 0 && prev < emomHalf && elapsed >= emomHalf) {
+        speakText(`Halfway. ${speakDuration(cfg.totalSeconds - emomHalf)} to go`, voiceEnabled, audio);
+      }
       if (crossedBoundary(prev, elapsed, 60, 60)) {
         if (doBeep) { beepMinute(); tryVibrate(200); }
         // Voice: announce round and exercise at minute change
@@ -622,9 +637,11 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       // Start of REST period (crossing-safe across clock jumps)
       if (crossedBoundary(prev, elapsed, cycleLen, cfg.workSeconds)) {
         if (doBeep) { beepRest(); tryVibrate(200); }
-        // Voice: announce next exercise during rest
+        // Voice: announce what the next work period holds
         if (round === cfg.rounds && nextExName) {
           speakText(`Rest. Next exercise: ${nextExName}`, voiceEnabled, audio);
+        } else if (coach.nextPreview && exName) {
+          speakText(`Rest. Next: ${exName}`, voiceEnabled, audio); // same station, another round
         } else if (nextExName || exName) {
           speakText(`Rest`, voiceEnabled, audio);
         }
@@ -649,7 +666,8 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       }
       if (crossedBoundary(prev, elapsed, roundLen, stSec * cfg.stations)) {
         if (doBeep) { beepRest(); tryVibrate(300); }
-        speakText(`Rest`, voiceEnabled, audio);
+        const firstEx = coach.nextPreview && cfg.exercises && cfg.exercises[0];
+        speakText(firstEx ? `Rest. Next round: ${firstEx}` : `Rest`, voiceEnabled, audio);
       }
     }
     if (cfg.type === "deathby") {
@@ -668,12 +686,22 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       const exIdx = isRest ? numEx - 1 : Math.floor(withinRound / cfg.exerciseSeconds);
       const roundIdx = Math.floor(elapsed / roundLen);
       const exName = cfg.exercises && cfg.exercises[exIdx] ? cfg.exercises[exIdx] : null;
+      // Coaching: halfway + final-minute (before the segment announcements
+      // below so those win a speech collision)
+      const circHalf = Math.floor(cfg.totalSeconds / 2);
+      if (coach.halfway && cfg.totalSeconds >= 240 && prev < circHalf && elapsed >= circHalf) {
+        speakText(`Halfway. ${speakDuration(cfg.totalSeconds - circHalf)} to go`, voiceEnabled, audio);
+      }
+      if (coach.finalMinute && cfg.totalSeconds >= 120 && prev < cfg.totalSeconds - 60 && elapsed >= cfg.totalSeconds - 60) {
+        speakText("One minute remaining", voiceEnabled, audio);
+      }
       // Completion beep (crossing-safe)
       if (doBeep && prev < cfg.totalSeconds && elapsed >= cfg.totalSeconds) { beepFinish(); tryVibrate([200,100,200,100,400]); }
       // Start of rest period (crossing-safe)
       if (cfg.restSeconds > 0 && crossedBoundary(prev, elapsed, roundLen, workPeriod)) {
         if (doBeep) { beepRest(); tryVibrate(200); }
-        speakText(`Rest`, voiceEnabled, audio);
+        const nextRoundEx = coach.nextPreview && cfg.exercises && cfg.exercises[0];
+        speakText(nextRoundEx ? `Rest. Next round: ${nextRoundEx}` : `Rest`, voiceEnabled, audio);
       }
       // Start of a new exercise within the round (crossing-safe: fire when the
       // exercise segment identity changes; announces the CURRENT exercise once)
@@ -1440,7 +1468,8 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
       </div>
 
       {/* Timer display */}
-      {activeTimer && !isDone && <TimerDisplay config={activeTimer} elapsed={phase_timer.elapsed} audio={audioEnabled} countdownLeft={countdownLeft} voiceEnabled={voiceEnabled} outdoorMode={outdoorMode} fontSizeKey={fontSizeKey} />}
+      {activeTimer && !isDone && <TimerDisplay config={activeTimer} elapsed={phase_timer.elapsed} audio={audioEnabled} countdownLeft={countdownLeft} voiceEnabled={voiceEnabled} outdoorMode={outdoorMode} fontSizeKey={fontSizeKey}
+        coach={{ halfway: settings.voiceHalfway !== false, finalMinute: settings.voiceFinalMinute !== false, nextPreview: settings.voiceNextPreview !== false }} />}
 
       {/* Phase content */}
       <div style={{flex: 1, overflowY: "auto", paddingBottom: 90}}>
@@ -1931,6 +1960,149 @@ function formatLogResult(log) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// STATS VIEW — consistency, PBs, most-trained, breakdowns
+// ═══════════════════════════════════════════════════════════════
+function StatsView({ logs, onSelectWorkout }) {
+  const s = useMemo(() => {
+    const MS = 86400000;
+    const dayKey = (dt) => { const d = new Date(dt); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+    const days = [...new Set(logs.map(l => dayKey(l.date)))].sort();
+    // best-ever streak: longest run of consecutive days
+    let best = 0, run = 0, prevT = null;
+    for (const d of days) {
+      const t = new Date(d + "T12:00:00").getTime();
+      run = (prevT !== null && Math.round((t - prevT) / MS) === 1) ? run + 1 : 1;
+      if (run > best) best = run;
+      prevT = t;
+    }
+    // current streak: consecutive days ending today or yesterday
+    const set = new Set(days);
+    let cur = 0;
+    const anchor = set.has(dayKey(Date.now())) ? Date.now() : (set.has(dayKey(Date.now() - MS)) ? Date.now() - MS : null);
+    if (anchor !== null) { let t = anchor; while (set.has(dayKey(t))) { cur++; t -= MS; } }
+    // sessions per week, last 12 weeks (Monday-based)
+    const now = new Date();
+    const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7)); monday.setHours(0, 0, 0, 0);
+    const weeks = [];
+    for (let i = 11; i >= 0; i--) {
+      const start = new Date(monday); start.setDate(monday.getDate() - i * 7);
+      const end = new Date(start); end.setDate(start.getDate() + 7);
+      weeks.push({ label: `${start.getDate()}/${start.getMonth() + 1}`, count: logs.filter(l => { const d = new Date(l.date); return d >= start && d < end; }).length, isThisWeek: i === 0 });
+    }
+    // per-workout: PBs (2+ attempts) and most-trained
+    const byWorkout = {};
+    for (const l of logs) (byWorkout[l.workoutId] = byWorkout[l.workoutId] || []).push(l);
+    const bestLog = (group) => {
+      const rf = getResultFields(group[0].format);
+      if (!rf) return null;
+      const score = (l) =>
+        rf.type === "amrap" ? (l.rounds != null ? l.rounds * 1000 + (l.extraReps || 0) : null) :
+        rf.type === "fortime" ? (l.completionMins != null ? -((l.completionMins * 60) + (l.completionSecs || 0)) : null) :
+        rf.type === "reps" ? (l.totalReps != null ? l.totalReps : null) :
+        (rf.type === "rounds" || rf.type === "emom") ? (l.roundsCompleted != null ? l.roundsCompleted : null) : null;
+      let bl = null, bs = null;
+      for (const l of group) { const sc = score(l); if (sc == null) continue; if (bs === null || sc > bs) { bs = sc; bl = l; } }
+      return bl;
+    };
+    const pbs = Object.entries(byWorkout)
+      .filter(([, g]) => g.length >= 2)
+      .map(([id, g]) => ({ workoutId: Number(id), log: bestLog(g), count: g.length }))
+      .filter(x => x.log)
+      .sort((a, b) => new Date(b.log.date) - new Date(a.log.date))
+      .slice(0, 8);
+    const most = Object.entries(byWorkout)
+      .map(([id, g]) => ({ workoutId: Number(id), count: g.length, last: g.reduce((m, l) => Math.max(m, +new Date(l.date)), 0), best: bestLog(g) }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+    const tally = (arr) => { const m = {}; for (const x of arr) if (x) m[x] = (m[x] || 0) + 1; return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 6); };
+    const byFormat = tally(logs.map(l => { const w = RAW_DATA.find(r => r.id === l.workoutId); return (l.format || (w && w.format) || "").toUpperCase(); }));
+    const byFocus = tally(logs.map(l => { const w = RAW_DATA.find(r => r.id === l.workoutId); return w && w.focus; }));
+    return { cur, best, weeks, pbs, most, byFormat, byFocus };
+  }, [logs]);
+
+  const card = { background: "#111122", border: "1px solid #222", borderRadius: 14, padding: 16, marginBottom: 12 };
+  const heading = { fontSize: 12, fontWeight: 700, color: "#888", letterSpacing: 1.5, marginBottom: 12 };
+  const maxWeek = Math.max(1, ...s.weeks.map(w => w.count));
+  const wName = (id) => { const w = RAW_DATA.find(r => r.id === id); return w ? `#${w.id} · ${w.focus}` : `#${id}`; };
+  const daysAgo = (t) => { const d = Math.floor((Date.now() - t) / 86400000); return d === 0 ? "today" : d === 1 ? "yesterday" : `${d}d ago`; };
+  const bar = (label, count, max, color) => (
+    <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+      <span style={{ fontSize: 11, color: "#888", width: 82, textAlign: "right", textTransform: "lowercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+      <div style={{ flex: 1, height: 14, background: "#1a1a2e", borderRadius: 7 }}>
+        <div style={{ width: `${(count / max) * 100}%`, height: "100%", background: color, borderRadius: 7, minWidth: 4 }} />
+      </div>
+      <span style={{ fontSize: 12, color: "#aaa", width: 24, fontWeight: 700 }}>{count}</span>
+    </div>
+  );
+
+  if (logs.length < 3) {
+    return <div style={{ ...card, textAlign: "center", padding: 32 }}>
+      <div style={{ fontSize: 32, marginBottom: 10 }}>{"\u{1F4CA}"}</div>
+      <div style={{ fontSize: 14, color: "#888" }}>Log a few more workouts and your stats will appear here.</div>
+    </div>;
+  }
+
+  return (
+    <div style={{ marginBottom: 80 }}>
+      {/* Consistency */}
+      <div style={card}>
+        <div style={heading}>CONSISTENCY</div>
+        <div style={{ display: "flex", gap: 24, marginBottom: 16 }}>
+          <div><div style={{ fontSize: 30, fontWeight: 900, color: "#ff8a3a" }}>{s.cur}</div><div style={{ fontSize: 11, color: "#888" }}>CURRENT STREAK</div></div>
+          <div><div style={{ fontSize: 30, fontWeight: 900, color: "#3ddc84" }}>{s.best}</div><div style={{ fontSize: 11, color: "#888" }}>BEST STREAK</div></div>
+        </div>
+        <div style={{ fontSize: 11, color: "#666", marginBottom: 8 }}>Sessions per week — last 12 weeks</div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 64 }}>
+          {s.weeks.map((w, i) => (
+            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+              {w.count > 0 && <span style={{ fontSize: 9, color: w.isThisWeek ? "#ff8a3a" : "#666", fontWeight: 700 }}>{w.count}</span>}
+              <div style={{ width: "100%", borderRadius: 3, background: w.isThisWeek ? "#ff8a3a" : "#8b5cf6", opacity: w.count ? 1 : 0.15, height: Math.max(4, (w.count / maxWeek) * 44) }} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Personal bests */}
+      <div style={card}>
+        <div style={heading}>PERSONAL BESTS</div>
+        {s.pbs.length === 0 && <div style={{ fontSize: 13, color: "#666" }}>Repeat a workout to set your first PB.</div>}
+        {s.pbs.map(p => (
+          <button key={p.workoutId} onClick={() => { const w = RAW_DATA.find(r => r.id === p.workoutId); if (w) onSelectWorkout(w); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", borderBottom: "1px solid #1a1a2e", padding: "10px 0", cursor: "pointer" }}>
+            <div style={{ textAlign: "left" }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#ff8a3a" }}>{wName(p.workoutId)}</div>
+              <div style={{ fontSize: 11, color: "#666" }}>{p.count} attempts · set {new Date(p.log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</div>
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#3ddc84" }}>{"\u{1F3C6}"} {formatLogResult(p.log)}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Most trained */}
+      <div style={card}>
+        <div style={heading}>MOST TRAINED</div>
+        {s.most.map(m => (
+          <button key={m.workoutId} onClick={() => { const w = RAW_DATA.find(r => r.id === m.workoutId); if (w) onSelectWorkout(w); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", borderBottom: "1px solid #1a1a2e", padding: "10px 0", cursor: "pointer" }}>
+            <div style={{ textAlign: "left" }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{wName(m.workoutId)}</div>
+              <div style={{ fontSize: 11, color: "#666" }}>last done {daysAgo(m.last)}{m.best ? ` · best: ${formatLogResult(m.best)}` : ""}</div>
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 900, color: "#8b5cf6" }}>{m.count}{"×"}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Breakdown */}
+      <div style={card}>
+        <div style={heading}>BY FORMAT</div>
+        {s.byFormat.map(([label, count]) => bar(label, count, s.byFormat[0][1], "#ff8a3a"))}
+        <div style={{ ...heading, marginTop: 16 }}>BY FOCUS</div>
+        {s.byFocus.map(([label, count]) => bar(label, count, s.byFocus[0][1], "#8b5cf6"))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // HISTORY SCREEN
 // ═══════════════════════════════════════════════════════════════
 function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDeleteLog }) {
@@ -2048,12 +2220,12 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
 
       {/* View toggle */}
       <div style={{display: "flex", gap: 6, marginBottom: 16}}>
-        {["list", "calendar"].map(mode => (
+        {["list", "calendar", "stats"].map(mode => (
           <button key={mode} onClick={() => setViewMode(mode)} style={{
             flex: 1, padding: "10px 12px", borderRadius: 10, border: `1px solid ${viewMode === mode ? "#ff8a3a" : "#333"}`,
             background: viewMode === mode ? "#ff8a3a20" : "#111122", color: viewMode === mode ? "#ff8a3a" : "#888",
             fontSize: 13, fontWeight: 700, cursor: "pointer", textTransform: "capitalize",
-          }}>{mode === "list" ? "\u{1F4CB} List" : "\u{1F4C5} Calendar"}</button>
+          }}>{mode === "list" ? "\u{1F4CB} List" : mode === "calendar" ? "\u{1F4C5} Calendar" : "\u{1F4CA} Stats"}</button>
         ))}
       </div>
 
@@ -2091,8 +2263,11 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
         </div>
       )}
 
+      {/* Stats View */}
+      {viewMode === "stats" && <StatsView logs={logs} onSelectWorkout={onSelectWorkout} />}
+
       {/* List View */}
-      <div style={{marginBottom: 80}}>
+      {viewMode !== "stats" && <div style={{marginBottom: 80}}>
         {sortedLogs.map(log => {
           const w = RAW_DATA.find(r => r.id === log.workoutId);
           if (!w) return null;
@@ -2134,7 +2309,7 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
             </div>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -2358,6 +2533,35 @@ function SettingsScreen({ settings, onUpdate }) {
             <div style={{width: 20, height: 20, borderRadius: 10, background: "#fff", transition: "all 0.2s", transform: settings.voiceEnabled ? "translateX(20px)" : "translateX(0)"}} />
           </div>
         </button>
+      </div>
+
+      {/* Voice Coaching — cues layered on top of voice announcements */}
+      <div style={{marginBottom: 24}}>
+        <div style={sty.sectionTitle}>Voice Coaching</div>
+        <div style={{fontSize: 11, color: "#666", marginBottom: 8}}>Extra spoken cues during timed workouts. Only heard when Voice is on.</div>
+        {[
+          { key: "voiceHalfway", label: "Halfway call", desc: '"Halfway. 10 minutes to go" in AMRAPs and EMOMs' },
+          { key: "voiceFinalMinute", label: "Final-minute call", desc: '"One minute remaining" near the end of timed blocks' },
+          { key: "voiceNextPreview", label: "Next-exercise preview", desc: 'Rests announce what’s coming: "Rest. Next: KB Swings"' },
+        ].map(({ key, label, desc }) => {
+          const on = settings[key] !== false;
+          return (
+            <button key={key} onClick={() => onUpdate({ [key]: !on })} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%",
+              padding: "12px 16px", borderRadius: 12, cursor: "pointer", marginBottom: 8,
+              background: on ? "#8b5cf615" : "#111122",
+              border: on ? "1px solid #8b5cf650" : "1px solid #333",
+            }}>
+              <div>
+                <div style={{fontSize: 14, fontWeight: 700, color: on ? "#8b5cf6" : "#fff", textAlign: "left"}}>{label} {on ? "ON" : "OFF"}</div>
+                <div style={{fontSize: 11, color: "#888", textAlign: "left"}}>{desc}</div>
+              </div>
+              <div style={{width: 44, height: 24, borderRadius: 12, background: on ? "#8b5cf6" : "#444", padding: 2, transition: "all 0.2s", flexShrink: 0}}>
+                <div style={{width: 20, height: 20, borderRadius: 10, background: "#fff", transition: "all 0.2s", transform: on ? "translateX(20px)" : "translateX(0)"}} />
+              </div>
+            </button>
+          );
+        })}
       </div>
 
       {/* Audio Default */}

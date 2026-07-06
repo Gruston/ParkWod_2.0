@@ -2,7 +2,7 @@
 // These pin the fixes from June 2026: "40s", compound words, "*", "Nm", arrows.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normaliseNotation, expandAbbreviations } from "../src/engine/voice.js";
+import { normaliseNotation, expandAbbreviations, speakDuration } from "../src/engine/voice.js";
 
 const cases = [
   // seconds notation
@@ -40,4 +40,12 @@ test("expandAbbreviations: KB/DB/EMOTM", () => {
 
 test("expandAbbreviations: strips leading rep multiplier", () => {
   assert.equal(expandAbbreviations("3 x Burpees"), "Burpees");
+});
+
+test("speakDuration: natural phrasing", () => {
+  assert.equal(speakDuration(600), "10 minutes");
+  assert.equal(speakDuration(60), "1 minute");
+  assert.equal(speakDuration(750), "12 and a half minutes");
+  assert.equal(speakDuration(45), "45 seconds");
+  assert.equal(speakDuration(200), "3 minutes 20 seconds");
 });

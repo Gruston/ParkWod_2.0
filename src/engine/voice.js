@@ -50,7 +50,9 @@ function expandAbbreviations(text) {
   const expanded = words.map(w => {
     const lower = w.toLowerCase().replace(/[.,;:]+$/, "");
     const suffix = w.slice(lower.length);
-    return (VOICE_ABBREVIATIONS[lower] || w) + suffix;
+    // Only re-append the suffix to dictionary replacements — the original
+    // word already carries it (appending doubled punctuation: "Rest..")
+    return VOICE_ABBREVIATIONS[lower] ? VOICE_ABBREVIATIONS[lower] + suffix : w;
   });
   return expanded.join(" ");
 }
@@ -70,5 +72,15 @@ function cancelSpeech() {
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch(e) {}
 }
 
+// Natural speech for a duration in seconds: "10 minutes", "2 and a half
+// minutes", "45 seconds", "3 minutes 20 seconds"
+function speakDuration(secs) {
+  const m = Math.floor(secs / 60), s = Math.round(secs % 60);
+  if (m === 0) return `${s} seconds`;
+  const mins = m === 1 ? "1 minute" : `${m} minutes`;
+  if (s === 0) return mins;
+  if (s === 30) return `${m} and a half minutes`;
+  return `${mins} ${s} seconds`;
+}
 
-export { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech };
+export { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech, speakDuration };
