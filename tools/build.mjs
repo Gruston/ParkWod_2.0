@@ -13,8 +13,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 await build({
   entryPoints: [join(root, "src", "app.jsx")],
   outfile: join(root, "app.js"),
-  bundle: true,
-  jsx: "transform",           // React.createElement — React provided as global (CDN)
+  bundle: true,               // bundles React from node_modules — no CDN dependency
+  jsx: "transform",           // React.createElement (classic runtime)
+  define: { "process.env.NODE_ENV": '"production"' },
+  minify: true,
   target: "es2020",
   charset: "utf8",
   logLevel: "warning",
