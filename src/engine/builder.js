@@ -23,6 +23,7 @@ export const BLOCK_KINDS = [
   { kind: "rounds", label: "Rounds", desc: "Fixed rounds, at your own pace" },
   { kind: "fortime", label: "For Time", desc: "Race the clock, optional time cap" },
   { kind: "circuit", label: "Timed Circuit", desc: "Fixed seconds per exercise" },
+  { kind: "rest", label: "Rest", desc: "Timed rest between blocks" },
 ];
 
 const exLine = (e) => (e.reps ? `${e.reps} ${e.name}` : e.name).trim();
@@ -76,6 +77,14 @@ const COMPILERS = {
       timer: { type: "circuit", exerciseSeconds: exSec, restSeconds: rest, totalSeconds: rounds * roundLen, exercises: list, label: `Timed Circuit — ${list.length} × ${exSec}s` },
     };
   },
+  rest(b) {
+    const s = Number(b.restSeconds);
+    const human = s % 60 === 0 ? `${s / 60} min` : `${s}s`;
+    return {
+      content: `Rest ${human}`,
+      timer: { type: "countdown", totalSeconds: s, label: `Rest ${human}` },
+    };
+  },
 };
 
 // Which numeric fields each kind requires (used by validation and the UI)
@@ -86,6 +95,7 @@ export const KIND_FIELDS = {
   rounds: ["rounds"],
   fortime: [],          // capMinutes optional
   circuit: ["exerciseSeconds", "rounds"],
+  rest: ["restSeconds"],
 };
 
 export function validateDraft(draft) {
@@ -99,7 +109,7 @@ export function validateDraft(draft) {
     for (const f of KIND_FIELDS[b.kind]) {
       if (!Number(b[f]) || Number(b[f]) <= 0) problems.push(`${where}: enter ${f.replace(/([A-Z])/g, " $1").toLowerCase()}`);
     }
-    if (exNames(b).length === 0) problems.push(`${where}: add at least one exercise`);
+    if (b.kind !== "rest" && exNames(b).length === 0) problems.push(`${where}: add at least one exercise`);
     if (b.kind === "emom" && Number(b.minutes) > 0 && exNames(b).length > Number(b.minutes))
       problems.push(`${where}: more exercises than minutes`);
   });
@@ -132,7 +142,7 @@ function estimateDuration(blocks, coreBlocks, hasWarmup) {
   return Math.max(10, Math.round(mins / 5) * 5);
 }
 
-const KIND_TO_FORMAT = { amrap: "AMRAP", emom: "EMOM", tabata: "TABATA", rounds: "ROUNDS", fortime: "FOR TIME", circuit: "ROUNDS" };
+const KIND_TO_FORMAT = { amrap: "AMRAP", emom: "EMOM", tabata: "TABATA", rounds: "ROUNDS", fortime: "FOR TIME", circuit: "ROUNDS", rest: "MIXED" };
 
 // Compile a draft into a full workout object. `id` like "c1". The draft is
 // stored on the object so editing reopens exactly what was built.
@@ -141,7 +151,11 @@ export function compileWorkout(draft, id) {
   const coreBlocks = (draft.coreBlocks || []).map(b => COMPILERS[b.kind](b));
   const allNames = [...(draft.blocks || []), ...(draft.coreBlocks || [])].flatMap(exNames);
   const movements = deriveMovements(allNames);
-  const format = (draft.blocks || []).length === 1 ? KIND_TO_FORMAT[draft.blocks[0].kind] : "MIXED";
+  // Rest blocks don't define the workout's character — derive the format
+  // from the working blocks only (AMRAP + rest + AMRAP is still an AMRAP day)
+  const working = (draft.blocks || []).filter(b => b.kind !== "rest");
+  const workingKinds = [...new Set(working.map(b => b.kind))];
+  const format = workingKinds.length === 1 ? KIND_TO_FORMAT[workingKinds[0]] : "MIXED";
   return {
     id,
     custom: true,
@@ -166,5 +180,6 @@ export function newDraft() {
 }
 
 export function newBlock(kind) {
-  return { kind, minutes: "", workSeconds: kind === "tabata" ? 40 : "", restSeconds: kind === "tabata" ? 20 : (kind === "circuit" ? 60 : ""), rounds: "", exerciseSeconds: kind === "circuit" ? 30 : "", capMinutes: "", exercises: [{ reps: "", name: "" }] };
+  const restDefault = kind === "tabata" ? 20 : (kind === "circuit" || kind === "rest") ? 60 : "";
+  return { kind, minutes: "", workSeconds: kind === "tabata" ? 40 : "", restSeconds: restDefault, rounds: "", exerciseSeconds: kind === "circuit" ? 30 : "", capMinutes: "", exercises: kind === "rest" ? [] : [{ reps: "", name: "" }] };
 }

@@ -2581,15 +2581,17 @@ function BuilderScreen({ initialDraft, editingId, logsCount, onSave, onCancel })
             ))}
           </div>
         )}
-        <span style={bs.label}>{b.kind === "emom" ? "Exercises (one per minute slot, cycling)" : "Exercises"}</span>
-        {b.exercises.map((e, j) => (
-          <div key={j} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
-            <input type="number" min="0" placeholder="reps" value={e.reps} onChange={ev => patchExercise(listKey, i, j, { reps: ev.target.value })} style={{ ...bs.numInput, width: 58 }} />
-            <input list="builder-exercise-list" placeholder="exercise name" value={e.name} onChange={ev => patchExercise(listKey, i, j, { name: ev.target.value })} style={{ ...bs.input, flex: 1 }} />
-            <button style={{ ...bs.iconBtn, padding: "8px 10px" }} onClick={() => removeExercise(listKey, i, j)}>{"✕"}</button>
-          </div>
-        ))}
-        <button onClick={() => addExercise(listKey, i)} style={{ ...bs.iconBtn, color: "#3ddc84", borderColor: "#3ddc8440", marginTop: 2 }}>+ Add exercise</button>
+        {b.kind !== "rest" && <>
+          <span style={bs.label}>{b.kind === "emom" ? "Exercises (one per minute slot, cycling)" : "Exercises"}</span>
+          {b.exercises.map((e, j) => (
+            <div key={j} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+              <input type="number" min="0" placeholder="reps" autoComplete="off" value={e.reps} onChange={ev => patchExercise(listKey, i, j, { reps: ev.target.value })} style={{ ...bs.numInput, width: 58 }} />
+              <input list="builder-exercise-list" placeholder="exercise" autoComplete="off" autoCorrect="off" spellCheck="false" name={`pw-ex-${i}-${j}`} value={e.name} onChange={ev => patchExercise(listKey, i, j, { name: ev.target.value })} style={{ ...bs.input, flex: 1 }} />
+              <button style={{ ...bs.iconBtn, padding: "8px 10px" }} onClick={() => removeExercise(listKey, i, j)}>{"✕"}</button>
+            </div>
+          ))}
+          <button onClick={() => addExercise(listKey, i)} style={{ ...bs.iconBtn, color: "#3ddc84", borderColor: "#3ddc8440", marginTop: 2 }}>+ Add exercise</button>
+        </>}
       </div>
     );
   };
@@ -2638,7 +2640,7 @@ function BuilderScreen({ initialDraft, editingId, logsCount, onSave, onCancel })
 
         {/* Details */}
         <span style={bs.label}>Name</span>
-        <input value={draft.name} onChange={e => patch({ name: e.target.value })} placeholder="e.g. Saturday Smasher" style={{ ...bs.input, marginBottom: 12 }} />
+        <input value={draft.name} onChange={e => patch({ name: e.target.value })} placeholder="e.g. Saturday Smasher" autoComplete="off" name="pw-workout-title" style={{ ...bs.input, marginBottom: 12 }} />
         <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
           <div style={{ flex: 1 }}>
             <span style={bs.label}>Equipment</span>
@@ -2662,7 +2664,7 @@ function BuilderScreen({ initialDraft, editingId, logsCount, onSave, onCancel })
 
         {/* Warmup */}
         <span style={bs.label}>Warmup (optional, untimed)</span>
-        <input value={draft.warmup} onChange={e => patch({ warmup: e.target.value })} placeholder="e.g. 2 laps w 10 squats, 10 arm circles" style={{ ...bs.input, marginBottom: 20 }} />
+        <input value={draft.warmup} onChange={e => patch({ warmup: e.target.value })} placeholder="e.g. 2 laps w 10 squats, 10 arm circles" autoComplete="off" name="pw-warmup" style={{ ...bs.input, marginBottom: 20 }} />
 
         {/* Workout blocks */}
         <div style={{ fontSize: 13, fontWeight: 800, color: "#ff8a3a", letterSpacing: 1, marginBottom: 8 }}>WORKOUT BLOCKS</div>

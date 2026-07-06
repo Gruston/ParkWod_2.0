@@ -93,6 +93,40 @@ test("draft round-trip: stored draft recompiles identically", () => {
   assert.deepEqual(w1, w2);
 });
 
+test("Rest block: countdown timer, no exercises required", () => {
+  const draft = draftWith([
+    { ...newBlock("amrap"), minutes: 10, exercises: [ex(5, "Burpees")] },
+    { ...newBlock("rest"), restSeconds: 120 },
+    { ...newBlock("amrap"), minutes: 10, exercises: [ex(10, "Squats")] },
+  ]);
+  assert.equal(validateDraft(draft).length, 0); // rest needs no exercises
+  const w = compileWorkout(draft, "c1");
+  const restTimer = w.blocks.workout[1].timer;
+  assert.equal(restTimer.type, "countdown");
+  assert.equal(restTimer.totalSeconds, 120);
+  assert.equal(restTimer.label, "Rest 2 min");
+  assert.match(w.workout, /Rest 2 min/);
+});
+
+test("Rest blocks don't affect format: AMRAP + rest + AMRAP is still AMRAP", () => {
+  const w = compileWorkout(draftWith([
+    { ...newBlock("amrap"), minutes: 10, exercises: [ex(5, "Burpees")] },
+    { ...newBlock("rest"), restSeconds: 60 },
+    { ...newBlock("amrap"), minutes: 10, exercises: [ex(10, "Squats")] },
+  ]), "c1");
+  assert.equal(w.format, "AMRAP");
+  const mixed = compileWorkout(draftWith([
+    { ...newBlock("amrap"), minutes: 10, exercises: [ex(5, "Burpees")] },
+    { ...newBlock("rounds"), rounds: 3, exercises: [ex(10, "Squats")] },
+  ]), "c1");
+  assert.equal(mixed.format, "MIXED");
+});
+
+test("Rest block validation: needs a duration", () => {
+  const bad = draftWith([{ ...newBlock("amrap"), minutes: 10, exercises: [ex(5, "Burpees")] }, { ...newBlock("rest"), restSeconds: "" }]);
+  assert.ok(validateDraft(bad).some(p => /rest seconds/i.test(p)));
+});
+
 test("duration estimate is sane and card-friendly", () => {
   const w = compileWorkout(draftWith([{ ...newBlock("amrap"), minutes: 20, exercises: [ex(5, "Burpees")] }], { warmup: "2 laps" }), "c1");
   assert.ok(w.duration >= 20 && w.duration <= 35);
