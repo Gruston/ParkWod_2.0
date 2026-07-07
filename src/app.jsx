@@ -7,7 +7,7 @@ import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
 import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary } from "./engine/timer.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 import { WORKOUT_BLOCKS } from "./data/blocks.js";
-import { compileWorkout, validateDraft, newDraft, newBlock, BLOCK_KINDS, KIND_FIELDS } from "./engine/builder.js";
+import { compileWorkout, validateDraft, newDraft, newBlock, draftFromWorkout, BLOCK_KINDS, KIND_FIELDS } from "./engine/builder.js";
 
 // ── Custom workouts registry ──
 // Module-level cache kept in sync by useMyWorkouts (single instance in App)
@@ -121,6 +121,7 @@ const Icon = ({ name, size = 20, color = "currentColor", strokeWidth = 2 }) => {
     save: <><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></>,
     trash: <><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></>,
     clipboard: <><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></>,
+    copy: <><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></>,
     refresh: <><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></>,
     eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>,
     // Workout-specific icons
@@ -2571,6 +2572,12 @@ function BuilderScreen({ initialDraft, editingId, logsCount, onSave, onCancel })
             <button style={{ ...bs.iconBtn, color: "#ef4444", borderColor: "#ef444440" }} onClick={() => removeBlock(listKey, i)}>{"✕"}</button>
           </div>
         </div>
+        {b.refText && (
+          <div style={{ background: "#0a0a15", border: "1px dashed #444", borderRadius: 10, padding: "8px 10px", marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#666", letterSpacing: 1, marginBottom: 3 }}>ORIGINAL TEXT — for reference while you structure it</div>
+            <div style={{ fontSize: 12, color: "#999", whiteSpace: "pre-wrap" }}>{b.refText}</div>
+          </div>
+        )}
         {fields.length > 0 && (
           <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
             {fields.map(f => (
@@ -3148,6 +3155,14 @@ function App() {
           isFav={isFav(selectedWorkout.id)} onToggleFav={() => toggleFav(selectedWorkout.id)}
           onEditCustom={selectedWorkout.custom ? () => setBuilder({ draft: selectedWorkout.draft, editingId: selectedWorkout.id }) : null}
           onDeleteCustom={selectedWorkout.custom ? () => { deleteWorkout(selectedWorkout.id); setSelectedWorkout(null); setScreen("library"); } : null}
+          onDuplicate={() => setBuilder({
+            draft: draftFromWorkout(
+              selectedWorkout,
+              getWorkoutBlocks(selectedWorkout, "workout", selectedWorkout.workout),
+              selectedWorkout.core && selectedWorkout.core.trim() ? getWorkoutBlocks(selectedWorkout, "core", selectedWorkout.core) : []
+            ),
+            editingId: null,
+          })}
         />
       </div>}
       {builder && (
@@ -3915,7 +3930,7 @@ function FilterSection({ title, items, selected, onToggle, colors }) {
 // ═══════════════════════════════════════════════════════════════
 // WORKOUT DETAIL (with START WORKOUT button + tappable exercises)
 // ═══════════════════════════════════════════════════════════════
-function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout, logs, diffOverrides, onEditLog, fontSizeKey, isFav, onToggleFav, onEditCustom, onDeleteCustom }) {
+function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout, logs, diffOverrides, onEditLog, fontSizeKey, isFav, onToggleFav, onEditCustom, onDeleteCustom, onDuplicate }) {
   const [confirmDeleteCustom, setConfirmDeleteCustom] = useState(false);
   const customLogsCount = w.custom ? logs.filter(l => l.workoutId === w.id).length : 0;
   const contentFontSize = (FONT_SIZES[fontSizeKey] || FONT_SIZES.normal).base;
@@ -4093,6 +4108,13 @@ function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout
             display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontFamily: DS.font.body,
           }}>
             <Icon name="clipboard" size={16} color={DS.colors.textMuted} /> Log Result
+          </button>
+          <button onClick={onDuplicate} style={{
+            flex: 1, background: DS.colors.surface, border: `1px solid ${DS.colors.border}`,
+            borderRadius: DS.radius.lg, padding: "12px 16px", color: DS.colors.textSub, fontSize: 13, fontWeight: 600, cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontFamily: DS.font.body,
+          }}>
+            <Icon name="copy" size={16} color={DS.colors.textMuted} /> Duplicate
           </button>
         </div>
 

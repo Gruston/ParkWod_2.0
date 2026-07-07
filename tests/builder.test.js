@@ -2,7 +2,9 @@
 // runtime-ready workout object out.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compileWorkout, validateDraft, deriveMovements, newDraft, newBlock } from "../src/engine/builder.js";
+import { compileWorkout, validateDraft, deriveMovements, newDraft, newBlock, draftFromWorkout } from "../src/engine/builder.js";
+import { WORKOUT_BLOCKS } from "../src/data/blocks.js";
+import { RAW_DATA } from "../src/data/workouts.js";
 
 const draftWith = (blocks, extra = {}) => ({ ...newDraft(), name: "Test WOD", blocks, ...extra });
 const ex = (reps, name) => ({ reps, name });
@@ -125,6 +127,71 @@ test("Rest blocks don't affect format: AMRAP + rest + AMRAP is still AMRAP", () 
 test("Rest block validation: needs a duration", () => {
   const bad = draftWith([{ ...newBlock("amrap"), minutes: 10, exercises: [ex(5, "Burpees")] }, { ...newBlock("rest"), restSeconds: "" }]);
   assert.ok(validateDraft(bad).some(p => /rest seconds/i.test(p)));
+});
+
+// ── Duplicate & edit: draftFromWorkout ──
+const libWorkout = (id) => RAW_DATA.find(w => w.id === id);
+const dupDraft = (id) => draftFromWorkout(libWorkout(id), WORKOUT_BLOCKS[id].workout, WORKOUT_BLOCKS[id].core || []);
+
+test("duplicate #93: two 15-min EMOM blocks import complete", () => {
+  const d = dupDraft(93);
+  assert.equal(d.name, "WOD #93 (copy)");
+  assert.equal(d.blocks.length, 2);
+  for (const b of d.blocks) {
+    assert.equal(b.kind, "emom");
+    assert.equal(Number(b.minutes), 15);
+    assert.equal(b.exercises.length, 5);
+    assert.ok(b.exercises.every(e => e.name));
+  }
+  assert.equal(d.warmup, libWorkout(93).warmup);
+  // fill nothing — an imported structured workout should validate as-is
+  assert.deepEqual(validateDraft(d), []);
+});
+
+test("duplicate #44: tabata imports work/rest/rounds and stations", () => {
+  const d = dupDraft(44);
+  const t = d.blocks[0];
+  assert.equal(t.kind, "tabata");
+  assert.equal(Number(t.workSeconds), 40);
+  assert.equal(Number(t.restSeconds), 20);
+  assert.equal(t.exercises.length, 10);
+});
+
+test("duplicate #1: AMRAP imports minutes and comma-list exercises", () => {
+  const d = dupDraft(1);
+  const a = d.blocks.find(b => b.kind === "amrap");
+  assert.ok(a, "expected an amrap block");
+  assert.equal(Number(a.minutes), 25);
+  assert.ok(a.exercises.length >= 3);
+  assert.ok(a.exercises.some(e => /KB swings/i.test(e.name) && e.reps === "20"));
+});
+
+test("duplicate prose rounds workout: refText attached, rounds guessed", () => {
+  const d = dupDraft(60); // "6 rounds - 400M - 5 V-Ups..." stopwatch block
+  const r = d.blocks[0];
+  assert.equal(r.kind, "rounds");
+  assert.equal(r.rounds, "6");
+  assert.ok(r.refText && r.refText.includes("6 rounds"));
+});
+
+test("duplicate a custom workout: exact draft copy with (copy) suffix", () => {
+  const draft = { ...newDraft(), name: "My EMOM", blocks: [{ ...newBlock("emom"), minutes: 10, exercises: [ex(10, "KB Swings")] }] };
+  const w = compileWorkout(draft, "c1");
+  const d = draftFromWorkout(w, null, null);
+  assert.equal(d.name, "My EMOM (copy)");
+  assert.deepEqual(d.blocks, draft.blocks);
+});
+
+test("duplicated rest blocks import as rest, not amrap", () => {
+  const draft = { ...newDraft(), name: "x", blocks: [
+    { ...newBlock("amrap"), minutes: 10, exercises: [ex(5, "Burpees")] },
+    { ...newBlock("rest"), restSeconds: 90 },
+  ] };
+  const w = compileWorkout(draft, "c1");
+  // simulate a duplicate of a NON-custom workout with these declared blocks
+  const d = draftFromWorkout({ ...w, custom: false, draft: undefined }, w.blocks.workout, []);
+  assert.equal(d.blocks[1].kind, "rest");
+  assert.equal(Number(d.blocks[1].restSeconds), 90);
 });
 
 test("duration estimate is sane and card-friendly", () => {

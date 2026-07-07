@@ -179,6 +179,67 @@ export function newDraft() {
   return { name: "", equipment: "BODYWEIGHT", focus: "Full Body", rating: "Medium", warmup: "", blocks: [], coreBlocks: [] };
 }
 
+// ── Duplicate & edit: reverse-map a workout's declared blocks into a draft ──
+// Structured timers (emom/tabata/circuit/amrap) import complete. Prose-only
+// blocks (stopwatch rounds, FGB, death-by) become a Rounds/For Time block
+// with the original text attached as refText — a read-only reference shown
+// in the editor; the user fills in structured exercise rows themselves.
+
+function parseExerciseString(s) {
+  const m = String(s).trim().match(/^(\d+)\s+(.+)$/);
+  return m ? { reps: m[1], name: m[2] } : { reps: "", name: String(s).trim() };
+}
+
+const rowsOrEmpty = (list) => (list.length ? list : [{ reps: "", name: "" }]);
+
+function timerToDraftBlock(block) {
+  const t = block.timer || {};
+  const exRows = rowsOrEmpty((t.exercises || []).map(parseExerciseString));
+
+  if (t.type === "countdown") {
+    if (/^rest/i.test(t.label || "")) return { ...newBlock("rest"), restSeconds: t.totalSeconds || 60 };
+    // AMRAP: exercises live in the content text after the colon ("20 Min AMRAP: 5 burpees, 10 squats")
+    const after = block.content.includes(":") ? block.content.split(":").slice(1).join(":") : "";
+    const list = after.split(",").map(s => s.trim()).filter(Boolean).map(parseExerciseString);
+    return {
+      ...newBlock("amrap"),
+      minutes: Math.max(1, Math.round((t.totalSeconds || 600) / 60)),
+      exercises: rowsOrEmpty(list),
+      ...(list.length ? {} : { refText: block.content }),
+    };
+  }
+  if (t.type === "emom") return { ...newBlock("emom"), minutes: t.totalMinutes || Math.round((t.totalSeconds || 600) / 60), exercises: exRows };
+  if (t.type === "tabata") return { ...newBlock("tabata"), workSeconds: t.workSeconds, restSeconds: t.restSeconds, rounds: t.rounds || "", exercises: exRows };
+  if (t.type === "circuit") {
+    const roundLen = (t.exercises || []).length * (t.exerciseSeconds || 30) + (t.restSeconds || 0);
+    return { ...newBlock("circuit"), exerciseSeconds: t.exerciseSeconds, restSeconds: t.restSeconds || 0, rounds: roundLen > 0 && t.totalSeconds ? Math.max(1, Math.round(t.totalSeconds / roundLen)) : "", exercises: exRows };
+  }
+  if (t.type === "stopwatch" && t.capSeconds) {
+    return { ...newBlock("fortime"), capMinutes: Math.round(t.capSeconds / 60), exercises: [{ reps: "", name: "" }], refText: block.content };
+  }
+  // stopwatch rounds / fgb / death-by — prose reference, user structures it
+  const roundsGuess = (block.content.match(/^(\d+)\s*Rounds?/i) || [])[1] || "";
+  return { ...newBlock("rounds"), rounds: roundsGuess, exercises: [{ reps: "", name: "" }], refText: block.content };
+}
+
+export function draftFromWorkout(workout, workoutBlocks, coreBlocks) {
+  // Custom workouts carry their exact draft — a perfect copy
+  if (workout.custom && workout.draft) {
+    const copy = JSON.parse(JSON.stringify(workout.draft));
+    copy.name = `${copy.name} (copy)`;
+    return copy;
+  }
+  return {
+    name: `WOD #${workout.id} (copy)`,
+    equipment: workout.equipment || "BODYWEIGHT",
+    focus: workout.focus || "Full Body",
+    rating: workout.rating || "Medium",
+    warmup: workout.warmup || "",
+    blocks: (workoutBlocks || []).map(timerToDraftBlock),
+    coreBlocks: (coreBlocks || []).map(timerToDraftBlock),
+  };
+}
+
 export function newBlock(kind) {
   const restDefault = kind === "tabata" ? 20 : (kind === "circuit" || kind === "rest") ? 60 : "";
   return { kind, minutes: "", workSeconds: kind === "tabata" ? 40 : "", restSeconds: restDefault, rounds: "", exerciseSeconds: kind === "circuit" ? 30 : "", capMinutes: "", exercises: kind === "rest" ? [] : [{ reps: "", name: "" }] };
