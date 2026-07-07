@@ -3614,7 +3614,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
         <div style={{display: "flex", gap: 12, marginBottom: 16}}>
           {/* Day Streak Card */}
           <div style={{flex: 1, background: "linear-gradient(135deg, #111a15 0%, #0f1a12 100%)", borderRadius: DS.radius.xl, padding: "20px 16px", position: "relative", overflow: "hidden", border: "1px solid #3ddc8415"}}>
-            <div style={{position: "absolute", top: -30, right: -30, width: 100, height: 100, background: "radial-gradient(circle, #3ddc8408 0%, transparent 70%)"}} />
+            <div style={{position: "absolute", top: -30, right: -30, width: 100, height: 100, background: "radial-gradient(circle, #3ddc8408 0%, transparent 70%)", pointerEvents: "none"}} />
             <Icon name="fire" size={22} color={DS.colors.green} />
             <div style={{fontFamily: DS.font.display, fontSize: 52, color: "#fff", lineHeight: 1, marginTop: 8, letterSpacing: 1}}>
               {dayStreak || logs.length}
@@ -3624,7 +3624,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
 
           {/* Quick Start Card */}
           <button onClick={onRandom} style={{flex: 1, background: DS.gradient.orange, borderRadius: DS.radius.xl, padding: "20px 16px", position: "relative", overflow: "hidden", border: "none", cursor: "pointer", textAlign: "left"}}>
-            <div style={{position: "absolute", top: -20, right: -20, width: 80, height: 80, background: "radial-gradient(circle, #ffffff15 0%, transparent 70%)"}} />
+            <div style={{position: "absolute", top: -20, right: -20, width: 80, height: 80, background: "radial-gradient(circle, #ffffff15 0%, transparent 70%)", pointerEvents: "none"}} />
             <Icon name="play" size={20} color="#fff" />
             <div style={{fontFamily: DS.font.display, fontSize: 28, color: "#fff", lineHeight: 1.1, marginTop: 10, letterSpacing: 1}}>
               QUICK<br/>START
@@ -3676,11 +3676,13 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
         );
         if (candidates.length === 0) candidates = getAllWorkouts();
         const today = new Date(); const seed = today.getFullYear() * 10000 + (today.getMonth()+1) * 100 + today.getDate();
-        const pick = candidates[(seed + pickShuffle * 7919) % candidates.length];
+        // pickShuffle is 0 for the stable daily pick; each shuffle tap sets a
+        // fresh random offset so the sequence never repeats predictably
+        const pick = candidates[(seed + pickShuffle) % candidates.length];
         const avoidedLabel = recentFocuses.length > 0 ? `Avoids ${recentFocuses[0].toLowerCase()}` : "Fresh every day";
         return (
           <div className="card-float-3" style={{margin: "0 20px 20px", background: "linear-gradient(135deg, #1a1a3e, #111128)", border: "1px solid #8b5cf625", borderRadius: DS.radius.xl, padding: 16, position: "relative", overflow: "hidden"}}>
-            <div style={{position: "absolute", top: -40, right: -40, width: 120, height: 120, background: "radial-gradient(circle, #8b5cf608 0%, transparent 70%)"}} />
+            <div style={{position: "absolute", top: -40, right: -40, width: 120, height: 120, background: "radial-gradient(circle, #8b5cf608 0%, transparent 70%)", pointerEvents: "none"}} />
             <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10}}>
               <div style={{display: "flex", alignItems: "center", gap: 6}}>
                 <Icon name="target" size={14} color={DS.colors.purple} />
@@ -3693,7 +3695,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
                 <div style={{fontFamily: DS.font.display, fontSize: 24, color: DS.colors.orange, letterSpacing: 1}}>{pick.custom ? pick.name : `#${pick.id}`}</div>
                 <div style={{fontSize: 12, color: DS.colors.textSub, marginTop: 2}}>{pick.format.toLowerCase()} · {pick.equipment.toLowerCase()} · {pick.focus.toLowerCase()} · {pick.duration}m</div>
               </button>
-              <button onClick={() => setPickShuffle(n => n + 1)} title="Shuffle" style={{
+              <button onClick={() => setPickShuffle(1 + Math.floor(Math.random() * 100000))} title="Shuffle" style={{
                 background: "none", border: `1px solid ${DS.colors.border}`, borderRadius: DS.radius.md,
                 padding: "10px 12px", color: DS.colors.textSub, fontSize: 14, cursor: "pointer",
               }}>{"🎲"}</button>
@@ -3853,8 +3855,8 @@ function LibraryScreen({ workouts, filters, setFilters, showFilters, setShowFilt
     <div style={{padding: "0 0 20px", overflowY: "auto", maxHeight: "calc(100vh - 140px)"}}>
       {/* ── Hero banner ── */}
       <div className="card-float-1" style={{margin: "0 20px 16px", background: DS.gradient.greenNeon, borderRadius: DS.radius.xl, padding: "24px 20px", position: "relative", overflow: "hidden"}}>
-        <div style={{position: "absolute", top: -40, right: -40, width: 140, height: 140, background: "radial-gradient(circle, rgba(255,255,255,0.15) 0%, transparent 70%)"}} />
-        <div style={{position: "absolute", bottom: -20, left: -20, width: 80, height: 80, background: "radial-gradient(circle, rgba(0,0,0,0.1) 0%, transparent 70%)"}} />
+        <div style={{position: "absolute", top: -40, right: -40, width: 140, height: 140, background: "radial-gradient(circle, rgba(255,255,255,0.15) 0%, transparent 70%)", pointerEvents: "none"}} />
+        <div style={{position: "absolute", bottom: -20, left: -20, width: 80, height: 80, background: "radial-gradient(circle, rgba(0,0,0,0.1) 0%, transparent 70%)", pointerEvents: "none"}} />
         <div style={{fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "rgba(0,0,0,0.5)", marginBottom: 4}}>LEVEL UP YOUR GAME</div>
         <div style={{fontFamily: DS.font.display, fontSize: 36, color: "#000", lineHeight: 1, letterSpacing: 1}}>CHOOSE YOUR</div>
         <div style={{fontFamily: DS.font.display, fontSize: 36, color: "#000", lineHeight: 1, letterSpacing: 1, fontStyle: "italic", marginBottom: 10}}>STRENGTH.</div>
