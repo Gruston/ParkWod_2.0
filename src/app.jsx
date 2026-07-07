@@ -7,6 +7,7 @@ import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
 import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary } from "./engine/timer.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 import { WORKOUT_BLOCKS } from "./data/blocks.js";
+import { exerciseMatchers, describePhrase, findExercisesInText } from "./engine/exercises-match.js";
 import { compileWorkout, validateDraft, newDraft, newBlock, draftFromWorkout, BLOCK_KINDS, KIND_FIELDS } from "./engine/builder.js";
 
 // ── Custom workouts registry ──
@@ -301,126 +302,46 @@ function genId() { return Date.now().toString(36) + Math.random().toString(36).s
 // ═══════════════════════════════════════════════════════════════
 // HELPER: Highlight exercises in text
 // ═══════════════════════════════════════════════════════════════
+// The comma/newline/paren/dash-delimited item surrounding a match — this is
+// the full phrase (incl. modifiers like "w bounce") passed to the modal.
+function enclosingPhrase(text, start, end) {
+  const left = text.slice(0, start);
+  const lm = [...left.matchAll(/[,\n()]|\s-\s|\bthen\b/gi)];
+  const leftCut = lm.length ? lm[lm.length - 1].index + lm[lm.length - 1][0].length : 0;
+  const rm = text.slice(end).match(/[,\n()]|\s-\s|\bthen\b/i);
+  const rightCut = rm ? end + rm.index : text.length;
+  return text.slice(leftCut, rightCut).trim();
+}
+
 function HighlightedText({ text, onExerciseTap }) {
   const parts = useMemo(() => {
-    const exercisePatterns = Object.keys(EXERCISE_INFO).map(key => {
-      const info = EXERCISE_INFO[key];
-      const names = [info.name.toLowerCase()];
-      if (info.aka) info.aka.split(",").forEach(a => { if (a.trim()) names.push(a.trim().toLowerCase()); });
-      // Add common text variants
-      const variants = {
-        "squats": ["sq ", "sq,", "goblet sq", "prisoner sq", "db sq", "db squats", "kb squat", "kb squats", "weighted squat", "weighted sq", "tempo sq", "tempo squat", "in and out squat", "in and out sq"],
-        "push-ups": ["push-up", "push up", "pushup", "tri-cep push", "y push-up", "y pushup", "triple push-up", "triple pushup", "inverted pushup", "inverted push-up"],
-        "rows": ["pull-up row", "pullup row", "pull up row", "db rows", "kb rows", "kettlebell rows", "kettlebell row", "dumbbell rows", "dumbbell row", "bar rows", "bar row"],
-        "renegade rows": ["renegade row", "plank row", "plank rows"],
-        "bent-over row": ["bent over row", "bentover row", "bent-over row", "db bent-over row", "kb bent-over row", "bent over rows", "bentover rows"],
-        "kb swings": ["kb swing", "kettle bell swing", "kettlebell swing"],
-        "shoulder press": ["db press", "strict press", "strict-press", "push press", "push-press", "kb push press", "db shoulder press", "clean & press", "arnold press", "db arnold", "arnold curl to press"],
-        "curls": ["bicep curl", "hammer curl", "db curl"],
-        "triceps": ["skull crush", "skull crusher", "skullcrusher", "skull crushers", "tri-cep skullcrusher", "kb skull crusher", "tricep ext", "tri-cep kick"],
-        "lunges": ["walking lunge", "jump lunge", "rev lunge", "reverse lunge", "db lunge", "dumbbell lunge", "lizard lunge"],
-        "burpees": ["burpee"],
-        "box jumps": ["box jump", "double box jump"],
-        "thrusters": ["thruster", "db thruster", "kb thruster"],
-        "deadlifts": ["deadlift", "romanian deadlift", "rdl", "db deadlift", "dead lift", "kb deadlift"],
-        "running": ["100m", "200m", "400m", "800m", "lap ", "laps", "sprint", "suicide", "jog"],
-        "high knees": ["high knee", "high-knees", "high-knee", "highknee"],
-        "dips": ["dip,", "dip "],
-        "mountain climbers": ["mountain climber", "mtn climber"],
-        "cross body mountain climbers": ["cross body mountain", "cross-body mountain", "cross body climber", "cross-body climber"],
-        "sit-ups": ["situp", "sit-up", "sit up"],
-        "sit-up overhead reach": ["sit-up w overhead", "situp overhead", "situp with overhead", "sit-up with overhead"],
-        "crunches": ["crunch", "cycle crunch", "bicycle crunch", "2 punch crunch", "2-punch crunch", "rev crunch", "reverse crunch"],
-        "ankle touches": ["ankle touch", "ankle tap", "ankle taps"],
-        "hollow holds": ["hollow hold", "hollow body"],
-        "planks": ["plank", "side plank", "copenhagen plank", "plank-up", "plank up", "plank toe touch", "plank jack", "plank pull through", "shoulder tap"],
-        "shoulder press push-up": ["pike push-up", "pike push up", "pike press", "shoulder push-up", "shoulder press pushup", "shoulder-press pushup"],
-        "shoulder tap push-up": ["shoulder tap push up", "shoulder-tap push up", "shoulder tap pushup"],
-        "jump squats": ["jump squat", "jump sq", "squat jump", "squat to jump"],
-        "knee drive lunge": ["knee drive lunge", "lunge to knee drive", "lunge w knee drive", "knee drive"],
-        "forearm raise": ["kb front raise", "front raise", "forearm raises"],
-        "lunge curls": ["lunge curl", "lunge to curl"],
-        "frog jumps": ["frog jump", "frog leap"],
-        "pogo jumps": ["pogo jump", "pogo hop"],
-        "lateral hops": ["lateral hop", "lateral hops over"],
-        "wall sit": ["wall squat"],
-        "lateral raise": ["db lateral raise", "side raise"],
-        "superman": ["supermans", "back extension"],
-        "side bend": ["db side bend", "lateral bend"],
-        "skipping": ["skip", "50 skips", "40 skips", "30 skips", "60 skips", "jump rope"],
-        "step-ups": ["step-up", "step up", "stepup"],
-        "cleans": ["clean &", "clean and", "kb clean"],
-        "snatches": ["snatch", "one arm snatch"],
-        "bear crawls": ["bear crawl"],
-        "inchworms": ["inch worm", "inchworm", "walk-out"],
-        "high pulls": ["high pull", "high-pull", "high-pulls", "kb high pull", "kb high-pull", "kb highpull"],
-        "kb halos": ["kb halo", "halo"],
-        "jumping": ["tuck jump"],
-        "v-ups": ["v-up", "v up"],
-        "russian twists": ["russian twist"],
-        "flutter kicks": ["flutter kick", "flutter"],
-        "leg raises": ["leg raise"],
-        "glute bridges": ["glute bridge", "hip bridge"],
-        "skaters": ["skater"],
-        "jumping jacks": ["jumping jack", "star jump", "seal jump"],
-        "bear complex": ["bear complex"],
-        "broad jumps": ["broad jump", "long jump"],
-        "bulgarian split squats": ["bulgarian split"],
-        "copenhagen planks": ["copenhagen plank", "copenhagen"],
-        "dead hangs": ["deadhang", "dead hang"],
-        "gorilla rows": ["gorilla row", "kb gorilla"],
-        "hollow body rocks": ["hollow body rock", "hollow rock"],
-        "kb around the world": ["kb around", "around the world"],
-        "kb windmills": ["kb windmill", "windmill"],
-        "lateral broad jumps": ["lateral broad jump", "lateral broad"],
-        "lateral lunges": ["lateral lunge", "side lunge"],
-        "plank to down dog": ["plank to down dog", "down dog", "downdog"],
-        "push-up t-rotations": ["t-rotation", "t rotation", "push-up to t", "t-rotate"],
-        "suitcase carry": ["suitcase carry", "farmer carry", "farmer walk"],
-        // v8 additions
-        "good mornings": ["good morning"],
-        "sumo squats": ["sumo sq", "sumo squat", "wide squat"],
-        "chest press": ["chest press", "db chest press", "db flys", "db fly", "bench press", "alternating bench"],
-        "arm circles": ["arm circle", "arm swing", "arm swings"],
-        "leg swings": ["leg swing", "hip swing"],
-        "bumkicks": ["bumkick", "bum kick", "butt kick", "heel kick"],
-        "carioca": ["carioca run", "grapevine"],
-      };
-      if (variants[key]) names.push(...variants[key]);
-      return { key, names };
-    });
-
-    // Build a regex that matches any exercise name
-    const allNames = exercisePatterns.flatMap(p => p.names).sort((a, b) => b.length - a.length);
-    if (allNames.length === 0) return [{ type: "text", value: text }];
-
-    const escaped = allNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const matcherList = exerciseMatchers(); // [ [name, key], ... ] longest-first
+    if (!matcherList.length) return [{ type: "text", value: text }];
+    const nameToKey = new Map(matcherList.map(([n, k]) => [n, k]));
+    const escaped = matcherList.map(([n]) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
     const regex = new RegExp(`(${escaped.join("|")})`, "gi");
-    const segments = [];
-    let last = 0;
-    let match;
     const lowerText = text.toLowerCase();
 
-    // Find matches
     const matches = [];
+    let match;
     while ((match = regex.exec(lowerText)) !== null) {
       matches.push({ index: match.index, length: match[0].length, matched: match[0].toLowerCase() });
+      if (match.index === regex.lastIndex) regex.lastIndex++;
     }
-
-    // Deduplicate overlapping matches (keep longest)
+    // Keep first (longest, since alternation is longest-first) non-overlapping match
     const filtered = [];
     for (const m of matches) {
-      const overlaps = filtered.some(f => m.index >= f.index && m.index < f.index + f.length);
-      if (!overlaps) filtered.push(m);
+      if (!filtered.some(f => m.index >= f.index && m.index < f.index + f.length)) filtered.push(m);
     }
+    filtered.sort((a, b) => a.index - b.index);
 
+    const segments = [];
+    let last = 0;
     for (const m of filtered) {
-      if (m.index > last) {
-        segments.push({ type: "text", value: text.slice(last, m.index) });
-      }
-      // Find which exercise this matches
-      const exerciseKey = exercisePatterns.find(p => p.names.some(n => m.matched.includes(n.toLowerCase())))?.key || null;
-      segments.push({ type: "exercise", value: text.slice(m.index, m.index + m.length), key: exerciseKey });
+      if (m.index > last) segments.push({ type: "text", value: text.slice(last, m.index) });
+      const key = nameToKey.get(m.matched) || null;
+      const phrase = enclosingPhrase(text, m.index, m.index + m.length);
+      segments.push({ type: "exercise", value: text.slice(m.index, m.index + m.length), key, phrase });
       last = m.index + m.length;
     }
     if (last < text.length) segments.push({ type: "text", value: text.slice(last) });
@@ -429,10 +350,10 @@ function HighlightedText({ text, onExerciseTap }) {
 
   // Long-press handler for exercise links
   const longPressRef = useRef(null);
-  const handleTouchStart = useCallback((key) => {
+  const handleTouchStart = useCallback((key, phrase) => {
     longPressRef.current = setTimeout(() => {
       tryVibrate(50);
-      onExerciseTap(key);
+      onExerciseTap(key, phrase);
     }, 400);
   }, [onExerciseTap]);
   const handleTouchEnd = useCallback(() => {
@@ -443,8 +364,8 @@ function HighlightedText({ text, onExerciseTap }) {
     <span>
       {parts.map((p, i) =>
         p.type === "exercise" && p.key ? (
-          <span key={i} className="exercise-link" onClick={(e) => { e.stopPropagation(); onExerciseTap(p.key); }}
-            onTouchStart={() => handleTouchStart(p.key)} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchEnd}
+          <span key={i} className="exercise-link" onClick={(e) => { e.stopPropagation(); onExerciseTap(p.key, p.phrase); }}
+            onTouchStart={() => handleTouchStart(p.key, p.phrase)} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchEnd}
             style={sty.exerciseHighlight}>
             {p.value}
           </span>
@@ -479,17 +400,45 @@ function getExerciseAlternatives(exKey) {
     .slice(0, 3);
 }
 
-function ExerciseModal({ exerciseKey, onClose }) {
-  const [key, setKey] = useState(exerciseKey);
-  useEffect(() => { setKey(exerciseKey); }, [exerciseKey]);
+// Title-case a raw phrase for display ("sumo squat w bounce" -> "Sumo Squat w Bounce")
+function titleCasePhrase(s) {
+  return String(s).replace(/\b\w/g, c => c.toUpperCase()).replace(/\bW\/?\b/g, "w");
+}
+
+function ExerciseModal({ exerciseKey, phrase, onClose }) {
+  // Decompose the tapped phrase (variation / compound / base) once
+  const desc = useMemo(() => describePhrase(phrase || exerciseKey || "", exerciseKey), [phrase, exerciseKey]);
+  const [key, setKey] = useState(desc.primaryKey || exerciseKey);
+  const [navigated, setNavigated] = useState(false);
+  useEffect(() => { setKey(desc.primaryKey || exerciseKey); setNavigated(false); }, [desc, exerciseKey]);
   if (!key || !EXERCISE_INFO[key]) return null;
   const ex = EXERCISE_INFO[key];
   const alts = getExerciseAlternatives(key);
+  const goTo = (k) => { setKey(k); setNavigated(true); };
+  // Show variation/compound framing only on the initial phrase, before navigating
+  const framing = !navigated ? desc.kind : "base";
+  const secondName = desc.secondKey && EXERCISE_INFO[desc.secondKey] ? EXERCISE_INFO[desc.secondKey].name : null;
   return (
     <div style={sty.modalOverlay} onClick={onClose}>
       <div style={sty.modalContent} onClick={e => e.stopPropagation()}>
         <button onClick={onClose} style={sty.modalClose}>{"\u2715"}</button>
-        <div style={{fontSize: 22, fontWeight: 800, color: "#ff8a3a", marginBottom: 4}}>{ex.name}</div>
+        {framing === "variation" ? (
+          <>
+            <div style={{fontSize: 22, fontWeight: 800, color: "#ff8a3a", marginBottom: 4}}>{titleCasePhrase(desc.display)}</div>
+            <div style={{fontSize: 12, color: "#8b5cf6", background: "#8b5cf615", border: "1px solid #8b5cf640", borderRadius: 8, padding: "8px 10px", marginBottom: 12}}>
+              Variation of <b>{ex.name}</b>{desc.modifier ? <> \u2014 with <b>{desc.modifier}</b></> : null}. Base technique below; add the variation as written in the workout.
+            </div>
+          </>
+        ) : framing === "compound" ? (
+          <>
+            <div style={{fontSize: 22, fontWeight: 800, color: "#ff8a3a", marginBottom: 4}}>{titleCasePhrase(desc.display)}</div>
+            <div style={{fontSize: 12, color: "#3ddc84", background: "#3ddc8415", border: "1px solid #3ddc8440", borderRadius: 8, padding: "8px 10px", marginBottom: 12}}>
+              A combined movement flowing from <b>{ex.name}</b> into <b>{secondName}</b> as one rep.{secondName ? <> Tap <button onClick={() => goTo(desc.secondKey)} style={{background: "none", border: "none", color: "#3ddc84", fontWeight: 700, cursor: "pointer", padding: 0, textDecoration: "underline"}}>{secondName}</button> for its technique.</> : null}
+            </div>
+          </>
+        ) : (
+          <div style={{fontSize: 22, fontWeight: 800, color: "#ff8a3a", marginBottom: 4}}>{ex.name}</div>
+        )}
         {ex.aka && <div style={{fontSize: 13, color: "#888", marginBottom: 12}}>Also called: {ex.aka}</div>}
         <div style={{marginBottom: 16}}>
           <div style={{fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6}}>Muscles Worked</div>
@@ -503,7 +452,7 @@ function ExerciseModal({ exerciseKey, onClose }) {
           <div style={{marginTop: 16, paddingTop: 14, borderTop: "1px solid #222"}}>
             <div style={{fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8}}>Alternatives (same muscles)</div>
             {alts.map(a => (
-              <button key={a.key} onClick={() => setKey(a.key)} style={{
+              <button key={a.key} onClick={() => goTo(a.key)} style={{
                 display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%",
                 background: "#111122", border: "1px solid #333", borderRadius: 10, padding: "10px 12px",
                 marginBottom: 6, cursor: "pointer", textAlign: "left",
@@ -1724,14 +1673,14 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
                 <div style={{background: outdoorMode ? "#00000008" : phase.color + "08", borderRadius: DS.radius.xl, padding: "16px 18px", marginBottom: 12, borderLeft: `4px solid ${phase.color}`, position: "relative"}}>
                   <div style={{fontSize: 11, fontWeight: 700, color: phase.color, letterSpacing: 1.5, marginBottom: 6}}>CURRENT SET</div>
                   <div style={{fontSize: fs.base + 2, fontWeight: 700, color: oText, lineHeight: 1.5}}>
-                    <HighlightedText text={firstLine} onExerciseTap={setExerciseModal} />
+                    <HighlightedText text={firstLine} onExerciseTap={(k, ph) => setExerciseModal({ key: k, phrase: ph })} />
                   </div>
                 </div>
               );
             })()}
             {phase.content.split("\n").filter(l => l.trim()).slice(1).map((line, i) => (
               <div key={i} style={{fontSize: fs.base, color: outdoorMode ? "#111" : "#e8e8e8", lineHeight: 1.7, marginBottom: 8, padding: "10px 14px", background: outdoorMode ? "#00000005" : "#ffffff05", borderRadius: DS.radius.md, borderLeft: `3px solid ${phase.color}25`}}>
-                <HighlightedText text={line} onExerciseTap={setExerciseModal} />
+                <HighlightedText text={line} onExerciseTap={(k, ph) => setExerciseModal({ key: k, phrase: ph })} />
               </div>
             ))}
           </div>
@@ -1818,7 +1767,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
         </div>
       )}
 
-      {exerciseModal && <ExerciseModal exerciseKey={exerciseModal} onClose={() => setExerciseModal(null)} />}
+      {exerciseModal && <ExerciseModal exerciseKey={exerciseModal?.key} phrase={exerciseModal?.phrase} onClose={() => setExerciseModal(null)} />}
       {settingsModal && activeTimer && <TimerSettingsModal config={activeTimer} onSave={handleSaveTimerSettings} onClose={() => setSettingsModal(false)} />}
       {showExitConfirm && (
         <div style={sty.modalOverlay} onClick={cancelExit}>
@@ -3325,7 +3274,7 @@ function App() {
       {screen === "detail" && selectedWorkout && <div className="screen-fade" key={`detail-${selectedWorkout.id}`}>
         <WorkoutDetail
           workout={selectedWorkout}
-          onExerciseTap={setExerciseModal}
+          onExerciseTap={(k, ph) => setExerciseModal({ key: k, phrase: ph })}
           onStartWorkout={() => setFullScreenMode(true)}
           onLogWorkout={() => setLogModal({ workout: selectedWorkout })}
           logs={logs}
@@ -3388,7 +3337,7 @@ function App() {
         </button>
       </nav>
 
-      {exerciseModal && <ExerciseModal exerciseKey={exerciseModal} onClose={() => setExerciseModal(null)} />}
+      {exerciseModal && <ExerciseModal exerciseKey={exerciseModal?.key} phrase={exerciseModal?.phrase} onClose={() => setExerciseModal(null)} />}
       {logModal && (
         <LogWorkoutModal
           workout={logModal.workout}
@@ -4382,11 +4331,18 @@ function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout
           Movements — tap for info
         </div>
         <div style={{display: "flex", flexWrap: "wrap", gap: 6}}>
-          {w.movements.map(m => (
-            <button key={m} onClick={() => onExerciseTap(m)} style={{...sty.tagSmall, background: "#1a1a2e", cursor: "pointer", borderColor: EXERCISE_INFO[m] ? "#ff8a3a50" : "#333"}}>
-              {EXERCISE_INFO[m] ? "\u{2139}\uFE0F " : ""}{m}
-            </button>
-          ))}
+          {(() => {
+            // Derive from the actual workout text so the list reflects what's
+            // really there (e.g. Versa Runner, not "running") and every chip
+            // resolves to a real info entry.
+            const derived = findExercisesInText([customWarmup || w.warmup, customWorkout || w.workout, customCore || w.core].filter(Boolean).join("\n"));
+            const keys = derived.length ? derived : (w.movements || []);
+            return keys.map(m => (
+              <button key={m} onClick={() => onExerciseTap(m)} style={{...sty.tagSmall, background: "#1a1a2e", cursor: "pointer", borderColor: EXERCISE_INFO[m] ? "#ff8a3a50" : "#333"}}>
+                {EXERCISE_INFO[m] ? "\u{2139}\uFE0F " : ""}{EXERCISE_INFO[m] ? EXERCISE_INFO[m].name : m}
+              </button>
+            ));
+          })()}
         </div>
       </div>
 
