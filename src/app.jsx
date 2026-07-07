@@ -458,9 +458,32 @@ function HighlightedText({ text, onExerciseTap }) {
 // ═══════════════════════════════════════════════════════════════
 // EXERCISE INFO MODAL
 // ═══════════════════════════════════════════════════════════════
+// Same-muscle alternatives (info-only): score by overlapping muscle groups,
+// weight the primary muscle heavily, take the top three.
+function getExerciseAlternatives(exKey) {
+  const info = EXERCISE_INFO[exKey];
+  if (!info) return [];
+  const muscles = info.muscles.toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
+  const primary = muscles[0];
+  return Object.entries(EXERCISE_INFO)
+    .filter(([k]) => k !== exKey)
+    .map(([k, i]) => {
+      const m = i.muscles.toLowerCase();
+      let score = muscles.filter(x => m.includes(x)).length;
+      if (primary && m.split(",")[0].trim().includes(primary)) score += 2;
+      return { key: k, name: i.name, muscles: i.muscles, score };
+    })
+    .filter(x => x.score >= 2)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+}
+
 function ExerciseModal({ exerciseKey, onClose }) {
-  if (!exerciseKey || !EXERCISE_INFO[exerciseKey]) return null;
-  const ex = EXERCISE_INFO[exerciseKey];
+  const [key, setKey] = useState(exerciseKey);
+  useEffect(() => { setKey(exerciseKey); }, [exerciseKey]);
+  if (!key || !EXERCISE_INFO[key]) return null;
+  const ex = EXERCISE_INFO[key];
+  const alts = getExerciseAlternatives(key);
   return (
     <div style={sty.modalOverlay} onClick={onClose}>
       <div style={sty.modalContent} onClick={e => e.stopPropagation()}>
@@ -475,6 +498,24 @@ function ExerciseModal({ exerciseKey, onClose }) {
           <div style={{fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6}}>How To Do It</div>
           <div style={{fontSize: 15, color: "#e0e0e0", lineHeight: 1.7}}>{ex.desc}</div>
         </div>
+        {alts.length > 0 && (
+          <div style={{marginTop: 16, paddingTop: 14, borderTop: "1px solid #222"}}>
+            <div style={{fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8}}>Alternatives (same muscles)</div>
+            {alts.map(a => (
+              <button key={a.key} onClick={() => setKey(a.key)} style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%",
+                background: "#111122", border: "1px solid #333", borderRadius: 10, padding: "10px 12px",
+                marginBottom: 6, cursor: "pointer", textAlign: "left",
+              }}>
+                <div>
+                  <div style={{fontSize: 14, fontWeight: 700, color: "#3ddc84"}}>{a.name}</div>
+                  <div style={{fontSize: 11, color: "#888"}}>{a.muscles}</div>
+                </div>
+                <span style={{fontSize: 12, color: "#666"}}>{"\u2192"}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2094,6 +2135,41 @@ function StatsView({ logs, onSelectWorkout }) {
         </div>
       </div>
 
+      {/* Badges */}
+      <div style={card}>
+        <div style={heading}>BADGES</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+          {[
+            { need: 10, type: "count", label: "10 Sessions", icon: "\u{1F949}" },
+            { need: 25, type: "count", label: "25 Sessions", icon: "\u{1F948}" },
+            { need: 50, type: "count", label: "50 Sessions", icon: "\u{1F947}" },
+            { need: 100, type: "count", label: "100 Sessions", icon: "\u{1F3C6}" },
+            { need: 250, type: "count", label: "250 Sessions", icon: "\u{1F48E}" },
+            { need: 3, type: "streak", label: "3-Day Streak", icon: "\u{1F525}" },
+            { need: 7, type: "streak", label: "7-Day Streak", icon: "\u{1F525}" },
+            { need: 14, type: "streak", label: "14-Day Streak", icon: "⚡" },
+            { need: 30, type: "streak", label: "30-Day Streak", icon: "\u{1F31F}" },
+          ].map(b => {
+            const earned = b.type === "count" ? logs.length >= b.need : s.best >= b.need;
+            let earnedDate = null;
+            if (earned && b.type === "count") {
+              const nth = [...logs].sort((x, y) => new Date(x.date) - new Date(y.date))[b.need - 1];
+              if (nth) earnedDate = new Date(nth.date).toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
+            }
+            return (
+              <div key={b.label} style={{
+                background: earned ? "#1a1a2e" : "#0d0d18", border: `1px solid ${earned ? "#eab30850" : "#1a1a2e"}`,
+                borderRadius: 12, padding: "10px 6px", textAlign: "center", opacity: earned ? 1 : 0.45,
+              }}>
+                <div style={{ fontSize: 22, filter: earned ? "none" : "grayscale(1)" }}>{b.icon}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: earned ? "#eab308" : "#555", marginTop: 3 }}>{b.label}</div>
+                <div style={{ fontSize: 9, color: "#666", minHeight: 11 }}>{earnedDate || (earned ? "earned" : "")}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Personal bests */}
       <div style={card}>
         <div style={heading}>PERSONAL BESTS</div>
@@ -2327,6 +2403,7 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
               {resultStr && <div style={{fontSize: 14, fontWeight: 700, color: "#3ddc84", marginBottom: 4}}>{resultStr}</div>}
               {log.notes && <div style={{fontSize: 12, color: "#888", fontStyle: "italic", marginBottom: 4}}>{log.notes}</div>}
               <div style={{display: "flex", gap: 6, marginTop: 6}}>
+                <button onClick={() => shareResultCard(log, found, isPBLog(log, logs))} style={{background: "none", border: "1px solid #3ddc8440", borderRadius: 8, padding: "5px 10px", color: "#3ddc84", fontSize: 11, cursor: "pointer"}}>{"⤴"} Share</button>
                 <button onClick={() => onEditLog(log)} style={{background: "none", border: "1px solid #444", borderRadius: 8, padding: "5px 10px", color: "#888", fontSize: 11, cursor: "pointer"}}>Edit</button>
                 <button onClick={() => setConfirmDelete(log.id)} style={{background: "none", border: "1px solid #ef444440", borderRadius: 8, padding: "5px 10px", color: "#ef4444", fontSize: 11, cursor: "pointer"}}>Delete</button>
               </div>
@@ -2469,6 +2546,99 @@ async function exportBackup() {
     setMeta({ lastBackupAt: Date.now() });
     return true;
   } catch (e) { console.error("Export failed:", e); return false; }
+}
+
+// Is this log the best result for its workout? (format-aware, needs 2+ logs)
+function isPBLog(log, allLogs) {
+  const group = allLogs.filter(l => l.workoutId === log.workoutId);
+  if (group.length < 2) return false;
+  const rf = getResultFields(log.format);
+  const score = (l) =>
+    rf.type === "amrap" ? (l.rounds != null ? l.rounds * 1000 + (l.extraReps || 0) : null) :
+    rf.type === "fortime" ? (l.completionMins != null ? -((l.completionMins * 60) + (l.completionSecs || 0)) : null) :
+    rf.type === "reps" ? (l.totalReps != null ? l.totalReps : null) :
+    (rf.type === "rounds" || rf.type === "emom") ? (l.roundsCompleted != null ? l.roundsCompleted : null) : null;
+  const mine = score(log);
+  if (mine == null) return false;
+  return group.every(l => l.id === log.id || (score(l) == null ? true : score(l) <= mine));
+}
+
+// Draw a shareable result image and hand it to the share sheet (download fallback)
+async function shareResultCard(log, workout, isPB) {
+  const c = document.createElement("canvas");
+  c.width = 1080; c.height = 1080;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#0a0a15"; ctx.fillRect(0, 0, 1080, 1080);
+  const grad = ctx.createLinearGradient(0, 0, 1080, 0);
+  grad.addColorStop(0, "#ff8a3a"); grad.addColorStop(1, "#8b5cf6");
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, 1080, 14);
+  try { await document.fonts.load('100px "Bebas Neue"'); } catch {}
+  ctx.fillStyle = "#ff8a3a"; ctx.font = '64px "Bebas Neue", sans-serif';
+  ctx.fillText("PARK WOD", 80, 160);
+  ctx.fillStyle = "#777"; ctx.font = '32px "DM Sans", sans-serif';
+  ctx.fillText(new Date(log.date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }), 80, 215);
+  const title = workout ? (workout.custom ? workout.name : `WOD #${workout.id}`) : `Workout ${log.workoutId}`;
+  ctx.fillStyle = "#fff"; ctx.font = '120px "Bebas Neue", sans-serif';
+  ctx.fillText(title.slice(0, 16), 80, 420);
+  if (workout) {
+    ctx.fillStyle = "#8b5cf6"; ctx.font = '600 36px "DM Sans", sans-serif';
+    ctx.fillText(`${workout.format} · ${workout.focus} · ${workout.equipment}`.toLowerCase(), 80, 485);
+  }
+  const result = formatLogResult(log) || (log.totalMins ? `${log.totalMins} min session` : "Done");
+  ctx.fillStyle = "#3ddc84"; ctx.font = '150px "Bebas Neue", sans-serif';
+  ctx.fillText(String(result).slice(0, 15), 80, 720);
+  if (isPB) {
+    ctx.font = "64px sans-serif"; ctx.fillText("🏆", 80, 830);
+    ctx.fillStyle = "#eab308"; ctx.font = '700 44px "DM Sans", sans-serif';
+    ctx.fillText("NEW PERSONAL BEST", 175, 815);
+  }
+  if (log.totalMins > 0) {
+    ctx.fillStyle = "#888"; ctx.font = '36px "DM Sans", sans-serif';
+    ctx.fillText(`${log.totalMins} minutes`, 80, isPB ? 920 : 830);
+  }
+  ctx.fillStyle = "#444"; ctx.font = '28px "DM Sans", sans-serif';
+  ctx.fillText("PARK WOD · outdoor fitness", 80, 1010);
+  const blob = await new Promise(res => c.toBlob(res, "image/png"));
+  const file = new File([blob], "parkwod-result.png", { type: "image/png" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: "PARK WOD result" });
+      return true;
+    }
+  } catch (e) { if (e && e.name === "AbortError") return false; }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "parkwod-result.png"; a.click(); URL.revokeObjectURL(url);
+  return true;
+}
+
+// Export workout history as a CSV via the share sheet (download fallback)
+async function exportHistoryCsv() {
+  const logs = loadData("logs", []);
+  const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  const rows = [["Date", "Workout", "Focus", "Format", "Equipment", "Duration (min)", "Result", "Notes"]];
+  for (const l of [...logs].sort((a, b) => new Date(a.date) - new Date(b.date))) {
+    const w = findWorkout(l.workoutId);
+    rows.push([
+      new Date(l.date).toISOString().slice(0, 10),
+      w ? (w.custom ? w.name : `#${w.id}`) : l.workoutId,
+      w ? w.focus : "", l.format || (w && w.format) || "", w ? w.equipment : "",
+      l.totalMins || "", formatLogResult(l), l.notes || "",
+    ]);
+  }
+  const csv = rows.map(r => r.map(esc).join(",")).join("\r\n");
+  const filename = `parkwod-history-${new Date().toISOString().slice(0, 10)}.csv`;
+  try {
+    const file = new File([csv], filename, { type: "text/csv" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: "PARK WOD history" });
+      return true;
+    }
+  } catch (e) { if (e && e.name === "AbortError") return false; }
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+  return true;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2894,6 +3064,11 @@ function SettingsScreen({ settings, onUpdate }) {
           background: "#3b82f615", border: "1px solid #3b82f650", color: "#3b82f6", fontSize: 14, fontWeight: 700,
         }}>{"\u{1F4C2}"} Import Backup (JSON)</button>
         <div style={{fontSize: 11, color: "#666", marginTop: 6}}>Restore a previously exported backup file. Replaces current data.</div>
+        <button onClick={() => { exportHistoryCsv(); }} style={{
+          width: "100%", padding: "14px 16px", borderRadius: 12, cursor: "pointer", marginTop: 8,
+          background: "#eab30815", border: "1px solid #eab30850", color: "#eab308", fontSize: 14, fontWeight: 700,
+        }}>{"\u{1F4CA}"} Export History (CSV)</button>
+        <div style={{fontSize: 11, color: "#666", marginTop: 6}}>Your workout log as a spreadsheet {"—"} one row per session</div>
       </div>
 
       {/* Clear Data */}
@@ -2988,6 +3163,7 @@ function App() {
   const { myWorkouts, saveWorkout, deleteWorkout } = useMyWorkouts();
   // Builder: null | { draft, editingId } — renders full-screen over everything
   const [builder, setBuilder] = useState(null);
+  const [justLogged, setJustLogged] = useState(null); // fresh log -> share-card offer
   const [showFilters, setShowFilters] = useState(false);
   const [excludedMovements, setExcludedMovements] = useState([]);
   const [showExclusions, setShowExclusions] = useState(false);
@@ -3062,6 +3238,9 @@ function App() {
       setEditingLog(null);
     } else {
       await addLog(entry);
+      // Offer a share card for the fresh result (auto-dismisses)
+      setJustLogged(entry);
+      setTimeout(() => setJustLogged(prev => (prev && prev.id === entry.id ? null : prev)), 8000);
     }
   };
 
@@ -3271,6 +3450,21 @@ function App() {
           <button onClick={() => setStorageError(false)} style={{ background: "none", border: "none", color: "#888", fontSize: 16, cursor: "pointer", padding: 4 }}>{"✕"}</button>
         </div>
       )}
+      {/* Fresh-result share offer */}
+      {justLogged && (
+        <div style={{
+          position: "fixed", bottom: 92, left: 16, right: 16, zIndex: 795,
+          background: "#111122", border: "1px solid #3ddc8450", borderRadius: 16, padding: "12px 16px",
+          display: "flex", alignItems: "center", gap: 12, boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#3ddc84" }}>Result logged {isPBLog(justLogged, logs) ? "· new PB! 🏆" : "💪"}</div>
+            <div style={{ fontSize: 12, color: "#888" }}>Share it as an image?</div>
+          </div>
+          <button onClick={() => { shareResultCard(justLogged, findWorkout(justLogged.workoutId), isPBLog(justLogged, logs)); setJustLogged(null); }} style={{ background: "#3ddc84", color: "#0a0a15", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>Share</button>
+          <button onClick={() => setJustLogged(null)} style={{ background: "none", border: "none", color: "#888", fontSize: 16, cursor: "pointer", padding: 4 }}>{"✕"}</button>
+        </div>
+      )}
       {/* Monthly backup nudge */}
       {backupNudge && !storageError && (
         <div style={{
@@ -3372,6 +3566,7 @@ function App() {
   );
 }
 function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, onFilterRating, onSelectWorkout }) {
+  const [pickShuffle, setPickShuffle] = useState(0); // Today's Pick shuffle offset (session-only)
   const stats = useMemo(() => ({
     total: RAW_DATA.length,
     byEquip: ALL_EQUIPMENT.map(e => ({ name: e, count: RAW_DATA.filter(w => w.equipment === e).length })),
@@ -3468,37 +3663,40 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
         </div>
       </div>
 
-      {/* ── Smart Workout Suggestion ── */}
+      {/* ── TODAY'S PICK — deterministic daily suggestion with shuffle ── */}
       {(() => {
-        if (logs.length < 1) return null;
         const sortedLogs = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
         const recentFocuses = sortedLogs.slice(0, 2).map(l => {
           const wk = findWorkout(l.workoutId);
           return wk ? wk.focus : null;
         }).filter(Boolean);
         const recentIds = sortedLogs.slice(0, 5).map(l => l.workoutId);
-        const candidates = RAW_DATA.filter(w =>
+        let candidates = getAllWorkouts().filter(w =>
           !recentIds.includes(w.id) && !recentFocuses.includes(w.focus)
         );
-        if (candidates.length === 0) return null;
+        if (candidates.length === 0) candidates = getAllWorkouts();
         const today = new Date(); const seed = today.getFullYear() * 10000 + (today.getMonth()+1) * 100 + today.getDate();
-        const pick = candidates[seed % candidates.length];
-        const avoidedLabel = recentFocuses.length > 0 ? recentFocuses[0].toLowerCase() : "the same muscles";
+        const pick = candidates[(seed + pickShuffle * 7919) % candidates.length];
+        const avoidedLabel = recentFocuses.length > 0 ? `Avoids ${recentFocuses[0].toLowerCase()}` : "Fresh every day";
         return (
           <div className="card-float-3" style={{margin: "0 20px 20px", background: "linear-gradient(135deg, #1a1a3e, #111128)", border: "1px solid #8b5cf625", borderRadius: DS.radius.xl, padding: 16, position: "relative", overflow: "hidden"}}>
             <div style={{position: "absolute", top: -40, right: -40, width: 120, height: 120, background: "radial-gradient(circle, #8b5cf608 0%, transparent 70%)"}} />
             <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10}}>
               <div style={{display: "flex", alignItems: "center", gap: 6}}>
                 <Icon name="target" size={14} color={DS.colors.purple} />
-                <span style={{fontSize: 11, fontWeight: 700, color: DS.colors.purple, letterSpacing: 1}}>SUGGESTED FOR YOU</span>
+                <span style={{fontSize: 11, fontWeight: 700, color: DS.colors.purple, letterSpacing: 1}}>TODAY'S PICK</span>
               </div>
-              <span style={{fontSize: 10, color: DS.colors.textMuted}}>Avoids {avoidedLabel}</span>
+              <span style={{fontSize: 10, color: DS.colors.textMuted}}>{avoidedLabel}</span>
             </div>
             <div style={{display: "flex", alignItems: "center", gap: 12}}>
-              <div style={{flex: 1}}>
-                <div style={{fontFamily: DS.font.display, fontSize: 24, color: DS.colors.orange, letterSpacing: 1}}>#{pick.id}</div>
+              <button onClick={() => onSelectWorkout(pick)} style={{flex: 1, background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left"}}>
+                <div style={{fontFamily: DS.font.display, fontSize: 24, color: DS.colors.orange, letterSpacing: 1}}>{pick.custom ? pick.name : `#${pick.id}`}</div>
                 <div style={{fontSize: 12, color: DS.colors.textSub, marginTop: 2}}>{pick.format.toLowerCase()} · {pick.equipment.toLowerCase()} · {pick.focus.toLowerCase()} · {pick.duration}m</div>
-              </div>
+              </button>
+              <button onClick={() => setPickShuffle(n => n + 1)} title="Shuffle" style={{
+                background: "none", border: `1px solid ${DS.colors.border}`, borderRadius: DS.radius.md,
+                padding: "10px 12px", color: DS.colors.textSub, fontSize: 14, cursor: "pointer",
+              }}>{"🎲"}</button>
               <button onClick={() => onSelectWorkout(pick)} style={{
                 background: DS.gradient.purple, border: "none", borderRadius: DS.radius.md,
                 padding: "10px 16px", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
