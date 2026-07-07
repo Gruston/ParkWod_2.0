@@ -311,7 +311,8 @@ function HighlightedText({ text, onExerciseTap }) {
       const variants = {
         "squats": ["sq ", "sq,", "goblet sq", "prisoner sq", "db sq", "db squats", "kb squat", "kb squats", "weighted squat", "weighted sq", "tempo sq", "tempo squat", "in and out squat", "in and out sq"],
         "push-ups": ["push-up", "push up", "pushup", "tri-cep push", "y push-up", "y pushup", "triple push-up", "triple pushup", "inverted pushup", "inverted push-up"],
-        "rows": ["pull-up row", "pullup row", "pull up row", "db rows", "renegade row", "kb rows", "kettlebell rows", "kettlebell row", "dumbbell rows", "dumbbell row", "bar rows", "bar row"],
+        "rows": ["pull-up row", "pullup row", "pull up row", "db rows", "kb rows", "kettlebell rows", "kettlebell row", "dumbbell rows", "dumbbell row", "bar rows", "bar row"],
+        "renegade rows": ["renegade row", "plank row", "plank rows"],
         "bent-over row": ["bent over row", "bentover row", "bent-over row", "db bent-over row", "kb bent-over row", "bent over rows", "bentover rows"],
         "kb swings": ["kb swing", "kettle bell swing", "kettlebell swing"],
         "shoulder press": ["db press", "strict press", "strict-press", "push press", "push-press", "kb push press", "db shoulder press", "clean & press", "arnold press", "db arnold", "arnold curl to press"],
