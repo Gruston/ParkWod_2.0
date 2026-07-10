@@ -179,6 +179,42 @@ export function newDraft() {
   return { name: "", equipment: "BODYWEIGHT", focus: "Full Body", rating: "Medium", warmup: "", blocks: [], coreBlocks: [] };
 }
 
+// ── Quick Timer: a synthetic one-block workout for the standalone timer ──
+// Runs on the normal FullScreenWorkout engine (beeps, voice, wake lock) with
+// no exercises attached. Logged sessions use workoutId "timer".
+export function quickTimerWorkout(p) {
+  const mins = Number(p.minutes) || 0;
+  const work = Number(p.workSeconds) || 0, rest = Number(p.restSeconds) || 0, rounds = Number(p.rounds) || 0;
+  let timer, content, format;
+  if (p.kind === "amrap") {
+    timer = { type: "countdown", totalSeconds: mins * 60, label: `${mins} Min Countdown` };
+    content = `${mins} minute countdown`; format = "AMRAP";
+  } else if (p.kind === "emom") {
+    timer = { type: "emom", totalSeconds: mins * 60, totalMinutes: mins, exercises: null, label: `EMOM ${mins} Min` };
+    content = `${mins} minute EMOM — minute beeps and calls`; format = "EMOM";
+  } else if (p.kind === "tabata") {
+    timer = { type: "tabata", workSeconds: work, restSeconds: rest, rounds, stations: 1, exercises: null, label: `Tabata ${work}s/${rest}s × ${rounds}` };
+    content = `Tabata — ${work}s work / ${rest}s rest × ${rounds} rounds`; format = "TABATA";
+  } else if (p.kind === "circuit") {
+    const n = Math.max(1, Number(p.stations) || 1);
+    const exSec = Number(p.exerciseSeconds) || 0;
+    const exercises = Array.from({ length: n }, (_, i) => `Exercise ${i + 1}`);
+    timer = { type: "circuit", exerciseSeconds: exSec, restSeconds: rest, totalSeconds: rounds * (n * exSec + rest), exercises, label: `Circuit ${n} × ${exSec}s` };
+    content = `${rounds} rounds — ${n} exercises × ${exSec}s each${rest ? `, ${rest}s rest between rounds` : ""}`; format = "ROUNDS";
+  } else {
+    const cap = Number(p.capMinutes) || 0;
+    timer = { type: "stopwatch", capSeconds: cap > 0 ? cap * 60 : null, label: cap ? `Stopwatch (${cap}m cap)` : "Stopwatch" };
+    content = cap ? `Stopwatch — ${cap} minute time cap` : "Stopwatch"; format = "FOR TIME";
+  }
+  const duration = timer.totalSeconds ? Math.ceil(timer.totalSeconds / 60) : (Number(p.capMinutes) || 20);
+  return {
+    id: "timer", custom: true, synthetic: true, name: "Quick Timer", rating: "Medium",
+    duration, equipment: "BODYWEIGHT", format, focus: "Quick Timer",
+    movements: [], wm: [], warmup: "", core: "",
+    workout: content, blocks: { workout: [{ content, timer }] },
+  };
+}
+
 // ── Duplicate & edit: reverse-map a workout's declared blocks into a draft ──
 // Structured timers (emom/tabata/circuit/amrap) import complete. Prose-only
 // blocks (stopwatch rounds, FGB, death-by) become a Rounds/For Time block

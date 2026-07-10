@@ -8,14 +8,24 @@ import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapse
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 import { WORKOUT_BLOCKS } from "./data/blocks.js";
 import { exerciseMatchers, describePhrase, findExercisesInText } from "./engine/exercises-match.js";
-import { compileWorkout, validateDraft, newDraft, newBlock, draftFromWorkout, BLOCK_KINDS, KIND_FIELDS } from "./engine/builder.js";
+import { compileWorkout, validateDraft, newDraft, newBlock, draftFromWorkout, quickTimerWorkout, BLOCK_KINDS, KIND_FIELDS } from "./engine/builder.js";
 
 // ── Custom workouts registry ──
 // Module-level cache kept in sync by useMyWorkouts (single instance in App)
 // so plain helpers like findWorkout stay correct outside React state flow.
 let CUSTOM_WORKOUTS = [];
+// Static identity for standalone Quick Timer sessions, so their logs resolve
+// in History/Stats. Never listed in the library; synthetic guards tap-through.
+const QUICK_TIMER_META = {
+  id: "timer", custom: true, synthetic: true, name: "Quick Timer", format: "MIXED",
+  focus: "quick timer", rating: "Medium", equipment: "BODYWEIGHT", duration: 0,
+  movements: [], wm: [], warmup: "", workout: "Standalone timer session", core: "",
+};
 function getAllWorkouts() { return CUSTOM_WORKOUTS.length ? [...RAW_DATA, ...CUSTOM_WORKOUTS] : RAW_DATA; }
-function findWorkout(id) { return RAW_DATA.find(w => w.id === id) || CUSTOM_WORKOUTS.find(w => w.id === id); }
+function findWorkout(id) {
+  if (id === "timer") return QUICK_TIMER_META;
+  return RAW_DATA.find(w => w.id === id) || CUSTOM_WORKOUTS.find(w => w.id === id);
+}
 
 function useMyWorkouts() {
   const [myWorkouts, setMyWorkouts] = useState(() => {
@@ -1211,8 +1221,9 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   };
 
   // Crash recovery — auto-save workout state every 15 seconds
+  // (skipped for standalone Quick Timer sessions — nothing to resume into)
   useEffect(() => {
-    if (!started || isDone) return;
+    if (!started || isDone || workout.synthetic) return;
     const interval = setInterval(() => {
       saveWorkoutState({
         workoutId: workout.id,
@@ -1364,7 +1375,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
           <div style={{fontSize: 44, marginBottom: 8}}>{"\u{1F525}"}</div>
           <div style={{fontSize: 24, fontWeight: 900, color: "#ff8a3a", marginBottom: 6}}>READY?</div>
           <div style={{fontSize: 14, color: "#888", marginBottom: 16, textAlign: "center"}}>
-            #{workout.id} {"\u00B7"} {workout.equipment.toLowerCase()} {"\u00B7"} {workout.format.toLowerCase()}
+            {workout.custom ? workout.name : `#${workout.id}`} {"\u00B7"} {workout.equipment.toLowerCase()} {"\u00B7"} {workout.format.toLowerCase()}
           </div>
           
           <div style={{width: "100%", maxWidth: 340, marginBottom: 20}}>
@@ -1520,7 +1531,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
             </div>
 
             {/* WOD # + COMPLETE! */}
-            <div style={{fontFamily: DS.font.display, fontSize: 48, color: outdoorMode ? "#111" : "#fff", letterSpacing: 2, lineHeight: 1}}>WOD #{workout.id}</div>
+            <div style={{fontFamily: DS.font.display, fontSize: 48, color: outdoorMode ? "#111" : "#fff", letterSpacing: 2, lineHeight: 1}}>{workout.custom ? workout.name.toUpperCase() : `WOD #${workout.id}`}</div>
             <div style={{fontFamily: DS.font.display, fontSize: 52, color: DS.colors.green, letterSpacing: 2, lineHeight: 1.1, marginBottom: 12}}>COMPLETE!</div>
 
             {/* Session duration */}
@@ -1870,7 +1881,7 @@ function LogWorkoutModal({ workout, onSave, onClose, existingLog, diffOverrides,
         <div style={{fontSize: 20, fontWeight: 800, color: "#ff8a3a", marginBottom: 2}}>
           {existingLog ? "Edit Log" : "Log Workout"}
         </div>
-        <div style={{fontSize: 14, color: "#888", marginBottom: 16}}>#{w.id} \u00B7 {w.format.toLowerCase()} \u00B7 {w.focus.toLowerCase()}</div>
+        <div style={{fontSize: 14, color: "#888", marginBottom: 16}}>{w.custom ? w.name : `#${w.id}`} {"\u00B7"} {w.format.toLowerCase()} {"\u00B7"} {w.focus.toLowerCase()}</div>
 
         {/* Date */}
         <div style={fieldGap}>
@@ -2336,8 +2347,8 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
             <div key={log.id} style={{background: "#111122", border: "1px solid #222", borderRadius: 14, padding: 14, marginBottom: 8}}>
               <div style={{display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6}}>
                 <div>
-                  <button onClick={() => found && onSelectWorkout(found)} style={{background: "none", border: "none", padding: 0, cursor: found ? "pointer" : "default"}}>
-                    <span style={{fontSize: 17, fontWeight: 800, color: found ? "#ff8a3a" : "#666"}}>{w.custom ? w.name : `#${w.id}`}</span>
+                  <button onClick={() => found && !found.synthetic && onSelectWorkout(found)} style={{background: "none", border: "none", padding: 0, cursor: found && !found.synthetic ? "pointer" : "default"}}>
+                    <span style={{fontSize: 17, fontWeight: 800, color: found && !found.synthetic ? "#ff8a3a" : "#3ddc84"}}>{w.custom ? w.name : `#${w.id}`}</span>
                   </button>
                   <span style={{fontSize: 12, color: "#666", marginLeft: 8}}>{new Date(log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
                 </div>
@@ -3114,6 +3125,7 @@ function App() {
   // Builder: null | { draft, editingId } — renders full-screen over everything
   const [builder, setBuilder] = useState(null);
   const [justLogged, setJustLogged] = useState(null); // fresh log -> share-card offer
+  const [quickTimer, setQuickTimer] = useState(null); // synthetic Quick Timer workout
   const [showFilters, setShowFilters] = useState(false);
   const [excludedMovements, setExcludedMovements] = useState([]);
   const [showExclusions, setShowExclusions] = useState(false);
@@ -3202,6 +3214,9 @@ function App() {
     }
   };
 
+  if (fullScreenMode && quickTimer) {
+    return <FullScreenWorkout workout={quickTimer} onExit={() => { setFullScreenMode(false); setQuickTimer(null); }} settings={settings} onUpdateSettings={updateSettings} onLogWorkout={(elapsedSecs) => { const fmt = quickTimer.format; setFullScreenMode(false); setQuickTimer(null); setLogModal({ workout: { ...QUICK_TIMER_META, format: fmt }, elapsedSecs }); }} logs={logs} />;
+  }
   if (fullScreenMode && selectedWorkout) {
     return <FullScreenWorkout workout={selectedWorkout} onExit={() => setFullScreenMode(false)} settings={settings} onUpdateSettings={updateSettings} onLogWorkout={(elapsedSecs) => { setFullScreenMode(false); setLogModal({ workout: selectedWorkout, elapsedSecs }); }} logs={logs} />;
   }
@@ -3258,6 +3273,7 @@ function App() {
         onSelectWorkout={openWorkout}
         onFilterEquipment={(equip) => { setFilters({ equipment: [equip], rating: [], format: [], focus: [], search: "" }); setExcludedMovements([]); setScreen("library"); }}
         onFilterRating={(rating) => { setFilters({ equipment: [], rating: [rating], format: [], focus: [], search: "" }); setExcludedMovements([]); setScreen("library"); }}
+        onQuickTimer={(params) => { setQuickTimer(quickTimerWorkout(params)); setFullScreenMode(true); }}
       /></div>}
       {screen === "library" && <div className="screen-fade" key="library">
         <LibraryScreen
@@ -3515,8 +3531,11 @@ function App() {
     </div>
   );
 }
-function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, onFilterRating, onSelectWorkout }) {
+function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, onFilterRating, onSelectWorkout, onQuickTimer }) {
   const [pickShuffle, setPickShuffle] = useState(0); // Today's Pick shuffle offset (session-only)
+  const [qtOpen, setQtOpen] = useState(false);       // Quick Timer setup sheet
+  const [qtKind, setQtKind] = useState("amrap");
+  const [qtParams, setQtParams] = useState({ minutes: 20, workSeconds: 20, restSeconds: 10, rounds: 8, exerciseSeconds: 30, stations: 4, capMinutes: 0 });
   const stats = useMemo(() => ({
     total: RAW_DATA.length,
     byEquip: ALL_EQUIPMENT.map(e => ({ name: e, count: RAW_DATA.filter(w => w.equipment === e).length })),
@@ -3658,6 +3677,67 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
           </div>
         );
       })()}
+
+      {/* ── QUICK TIMER — standalone clock on the real timer engine ── */}
+      <div className="card-float-3" style={{margin: "0 20px 20px"}}>
+        <button onClick={() => setQtOpen(true)} style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 12, textAlign: "left",
+          background: "linear-gradient(135deg, #14251a, #101a12)", border: "1px solid #3ddc8425",
+          borderRadius: DS.radius.xl, padding: 16, cursor: "pointer",
+        }}>
+          <span style={{fontSize: 26}}>{"⏱"}</span>
+          <span style={{flex: 1}}>
+            <span style={{display: "block", fontSize: 13, fontWeight: 800, color: DS.colors.green, letterSpacing: 1}}>QUICK TIMER</span>
+            <span style={{display: "block", fontSize: 12, color: DS.colors.textSub, marginTop: 2}}>Just a clock — beeps, voice and wake lock, no workout attached</span>
+          </span>
+          <Icon name="chevronRight" size={18} color={DS.colors.green} />
+        </button>
+      </div>
+
+      {qtOpen && (
+        <div style={sty.modalOverlay} onClick={() => setQtOpen(false)}>
+          <div style={{...sty.modalContent, maxWidth: 340}} onClick={e => e.stopPropagation()}>
+            <button onClick={() => setQtOpen(false)} style={sty.modalClose}>{"✕"}</button>
+            <div style={{fontSize: 18, fontWeight: 800, color: "#3ddc84", marginBottom: 12}}>{"⏱"} Quick Timer</div>
+            <div className="scroll-hide" style={{display: "flex", gap: 6, overflowX: "auto", marginBottom: 14}}>
+              {[["amrap", "Countdown"], ["emom", "EMOM"], ["tabata", "Tabata"], ["circuit", "Circuit"], ["stopwatch", "Stopwatch"]].map(([k, label]) => (
+                <button key={k} onClick={() => setQtKind(k)} style={{
+                  padding: "8px 14px", borderRadius: DS.radius.pill, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+                  background: qtKind === k ? "#3ddc84" : DS.colors.surface, border: `1px solid ${qtKind === k ? "#3ddc84" : DS.colors.border}`,
+                  color: qtKind === k ? "#0a0a15" : DS.colors.textSub,
+                }}>{label}</button>
+              ))}
+            </div>
+            {(() => {
+              const num = (label, key, w = 90) => (
+                <div key={key}>
+                  <span style={{fontSize: 11, color: "#888", fontWeight: 700, display: "block", marginBottom: 4}}>{label}</span>
+                  <input type="number" min="0" value={qtParams[key]} onChange={e => setQtParams(p => ({ ...p, [key]: e.target.value }))}
+                    style={{width: w, background: "#111122", border: "1px solid #444", borderRadius: 8, padding: "10px", color: "#fff", fontSize: 16, textAlign: "center", outline: "none"}} />
+                </div>
+              );
+              const fields = qtKind === "amrap" ? [num("Minutes", "minutes")]
+                : qtKind === "emom" ? [num("Minutes", "minutes")]
+                : qtKind === "tabata" ? [num("Work (s)", "workSeconds"), num("Rest (s)", "restSeconds"), num("Rounds", "rounds")]
+                : qtKind === "circuit" ? [num("Secs/ex", "exerciseSeconds", 74), num("Exercises", "stations", 74), num("Rest (s)", "restSeconds", 74), num("Rounds", "rounds", 74)]
+                : [num("Time cap (min, 0 = none)", "capMinutes", 120)];
+              const valid = qtKind === "amrap" || qtKind === "emom" ? Number(qtParams.minutes) > 0
+                : qtKind === "tabata" ? Number(qtParams.workSeconds) > 0 && Number(qtParams.rounds) > 0
+                : qtKind === "circuit" ? Number(qtParams.exerciseSeconds) > 0 && Number(qtParams.rounds) > 0
+                : true;
+              return (
+                <>
+                  <div style={{display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16}}>{fields}</div>
+                  <button disabled={!valid} onClick={() => { setQtOpen(false); onQuickTimer({ kind: qtKind, ...qtParams }); }} style={{
+                    width: "100%", background: valid ? DS.gradient.green : "#222", border: "none", borderRadius: 12,
+                    padding: "14px", color: valid ? "#fff" : "#666", fontSize: 15, fontWeight: 800, cursor: valid ? "pointer" : "default",
+                  }}>GO {"▶"}</button>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {/* ── RECENT ACTIVITY ── */}
       {recentLogs.length > 0 && (

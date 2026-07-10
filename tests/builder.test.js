@@ -2,7 +2,7 @@
 // runtime-ready workout object out.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compileWorkout, validateDraft, deriveMovements, newDraft, newBlock, draftFromWorkout } from "../src/engine/builder.js";
+import { compileWorkout, validateDraft, deriveMovements, newDraft, newBlock, draftFromWorkout, quickTimerWorkout } from "../src/engine/builder.js";
 import { WORKOUT_BLOCKS } from "../src/data/blocks.js";
 import { RAW_DATA } from "../src/data/workouts.js";
 
@@ -192,6 +192,37 @@ test("duplicated rest blocks import as rest, not amrap", () => {
   const d = draftFromWorkout({ ...w, custom: false, draft: undefined }, w.blocks.workout, []);
   assert.equal(d.blocks[1].kind, "rest");
   assert.equal(Number(d.blocks[1].restSeconds), 90);
+});
+
+// ── Quick Timer synthetic workouts ──
+
+test("quick timer: countdown/emom/tabata/stopwatch produce runtime-ready timers", () => {
+  const cd = quickTimerWorkout({ kind: "amrap", minutes: 20 });
+  assert.equal(cd.id, "timer");
+  assert.equal(cd.synthetic, true);
+  assert.equal(cd.blocks.workout[0].timer.type, "countdown");
+  assert.equal(cd.blocks.workout[0].timer.totalSeconds, 1200);
+
+  const em = quickTimerWorkout({ kind: "emom", minutes: 12 });
+  assert.equal(em.blocks.workout[0].timer.totalMinutes, 12);
+  assert.equal(em.format, "EMOM");
+
+  const tb = quickTimerWorkout({ kind: "tabata", workSeconds: 20, restSeconds: 10, rounds: 8 });
+  assert.equal(tb.blocks.workout[0].timer.stations, 1); // single-station: no zero-division
+  assert.equal(tb.blocks.workout[0].timer.rounds, 8);
+
+  const sw = quickTimerWorkout({ kind: "stopwatch", capMinutes: 15 });
+  assert.equal(sw.blocks.workout[0].timer.capSeconds, 900);
+  const open = quickTimerWorkout({ kind: "stopwatch", capMinutes: 0 });
+  assert.equal(open.blocks.workout[0].timer.capSeconds, null);
+});
+
+test("quick timer circuit: generic stations and correct total", () => {
+  const c = quickTimerWorkout({ kind: "circuit", exerciseSeconds: 30, stations: 4, restSeconds: 60, rounds: 3 });
+  const t = c.blocks.workout[0].timer;
+  assert.equal(t.exercises.length, 4);
+  assert.equal(t.exercises[0], "Exercise 1");
+  assert.equal(t.totalSeconds, 3 * (4 * 30 + 60));
 });
 
 test("duration estimate is sane and card-friendly", () => {
