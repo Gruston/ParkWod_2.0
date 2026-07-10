@@ -171,3 +171,18 @@ export function describePhrase(phrase, fallbackKey) {
 
 // Matcher segments for the highlighter (name, key), longest first.
 export function exerciseMatchers() { return matchers(); }
+
+// Replace every occurrence of an exercise (any of its recognised names) in
+// the text with a replacement name, preserving reps and separators around it.
+// Used by injury-aware swaps; the result is stored as a normal customisation.
+export function swapExerciseInText(text, key, replacementName) {
+  const names = matchers().filter(([, k]) => k === key).map(([n]) => n);
+  if (!names.length) return text;
+  const escaped = names.sort((a, b) => b.length - a.length).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(`(${escaped.join("|")})`, "gi");
+  return String(text).replace(re, (m) => {
+    // some variant names carry a trailing space/comma ("sq ", "sq,") — keep it
+    const trail = /[\s,]$/.test(m) ? m.slice(-1) : "";
+    return replacementName + trail;
+  });
+}

@@ -7,7 +7,7 @@ import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
 import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary } from "./engine/timer.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 import { WORKOUT_BLOCKS } from "./data/blocks.js";
-import { exerciseMatchers, describePhrase, findExercisesInText } from "./engine/exercises-match.js";
+import { exerciseMatchers, describePhrase, findExercisesInText, swapExerciseInText } from "./engine/exercises-match.js";
 import { compileWorkout, validateDraft, newDraft, newBlock, draftFromWorkout, quickTimerWorkout, BLOCK_KINDS, KIND_FIELDS } from "./engine/builder.js";
 
 // ── Custom workouts registry ──
@@ -2938,6 +2938,61 @@ function SettingsScreen({ settings, onUpdate }) {
         })}
       </div>
 
+      {/* Weekly Plan */}
+      <div style={{marginBottom: 24}}>
+        <div style={sty.sectionTitle}>Weekly Plan</div>
+        <div style={{fontSize: 11, color: "#666", marginBottom: 8}}>Set sessions per week and a focus for each. Home tracks your week and Today's Pick serves the next focus. Any day, any order.</div>
+        <button onClick={() => onUpdate({ weeklyPlan: settings.weeklyPlan ? null : { focuses: ["Legs", "Upper Body", "Full Body"] } })} style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%",
+          padding: "14px 16px", borderRadius: 12, cursor: "pointer", marginBottom: 8,
+          background: settings.weeklyPlan ? "#3ddc8415" : "#111122",
+          border: settings.weeklyPlan ? "1px solid #3ddc8450" : "1px solid #333",
+        }}>
+          <div style={{fontSize: 15, fontWeight: 700, color: settings.weeklyPlan ? "#3ddc84" : "#fff"}}>
+            {"📅"} Weekly plan {settings.weeklyPlan ? "ON" : "OFF"}
+          </div>
+          <div style={{width: 44, height: 24, borderRadius: 12, background: settings.weeklyPlan ? "#3ddc84" : "#444", padding: 2, transition: "all 0.2s"}}>
+            <div style={{width: 20, height: 20, borderRadius: 10, background: "#fff", transition: "all 0.2s", transform: settings.weeklyPlan ? "translateX(20px)" : "translateX(0)"}} />
+          </div>
+        </button>
+        {settings.weeklyPlan && (() => {
+          const focuses = settings.weeklyPlan.focuses || [];
+          const setCount = (n) => {
+            const next = focuses.slice(0, n);
+            while (next.length < n) next.push("Full Body");
+            onUpdate({ weeklyPlan: { focuses: next } });
+          };
+          const setSlot = (i, f) => {
+            const next = [...focuses];
+            next[i] = f;
+            onUpdate({ weeklyPlan: { focuses: next } });
+          };
+          return (
+            <div style={{background: "#111122", border: "1px solid #333", borderRadius: 12, padding: 14}}>
+              <div style={{fontSize: 11, color: "#888", fontWeight: 700, marginBottom: 6}}>SESSIONS PER WEEK</div>
+              <div style={{display: "flex", gap: 6, marginBottom: 12}}>
+                {[2, 3, 4, 5].map(n => (
+                  <button key={n} onClick={() => setCount(n)} style={{
+                    flex: 1, padding: "10px", borderRadius: 10, cursor: "pointer", fontSize: 15, fontWeight: 800,
+                    background: focuses.length === n ? "#3ddc84" : "#1a1a2e",
+                    border: `1px solid ${focuses.length === n ? "#3ddc84" : "#333"}`,
+                    color: focuses.length === n ? "#0a0a15" : "#888",
+                  }}>{n}</button>
+                ))}
+              </div>
+              {focuses.map((f, i) => (
+                <div key={i} style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 6}}>
+                  <span style={{fontSize: 12, color: "#888", fontWeight: 700, width: 70}}>Session {i + 1}</span>
+                  <select value={f} onChange={e => setSlot(i, e.target.value)} style={{flex: 1, background: "#1a1a2e", border: "1px solid #444", borderRadius: 10, padding: "10px 12px", color: "#fff", fontSize: 14, outline: "none", fontFamily: "inherit"}}>
+                    {ALL_FOCUSES.map(x => <option key={x} value={x}>{x}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </div>
+
       {/* Audio Default */}
       <div style={{marginBottom: 24}}>
         <div style={sty.sectionTitle}>Audio Defaults</div>
@@ -3127,7 +3182,18 @@ function App() {
   const [justLogged, setJustLogged] = useState(null); // fresh log -> share-card offer
   const [quickTimer, setQuickTimer] = useState(null); // synthetic Quick Timer workout
   const [showFilters, setShowFilters] = useState(false);
-  const [excludedMovements, setExcludedMovements] = useState([]);
+  // Excluded movements persist — an injury doesn't reset when the app restarts
+  const [excludedMovements, setExcludedMovementsState] = useState(() => {
+    const m = loadData("excludedMovements", []);
+    return Array.isArray(m) ? m : [];
+  });
+  const setExcludedMovements = useCallback((v) => {
+    setExcludedMovementsState(prev => {
+      const next = typeof v === "function" ? v(prev) : v;
+      saveData("excludedMovements", next);
+      return next;
+    });
+  }, []);
   const [showExclusions, setShowExclusions] = useState(false);
   const [exerciseModal, setExerciseModal] = useState(null);
   const [fullScreenMode, setFullScreenMode] = useState(false);
@@ -3156,7 +3222,8 @@ function App() {
       if (filters.rating.length && !filters.rating.includes(diffOverrides[w.id] || w.rating)) return false;
       if (filters.format.length && !filters.format.includes(w.format)) return false;
       if (filters.focus.length && !filters.focus.includes(w.focus)) return false;
-      if (excludedMovements.length && w.wm.some(m => excludedMovements.includes(m))) return false;
+      // Excluded movements no longer hide workouts — they surface as
+      // "swap suggested" badges with one-tap alternatives on the detail page.
       if (filters.search) {
         const s = filters.search.toLowerCase();
         const matchesNum = w.id.toString().includes(s);
@@ -3274,6 +3341,7 @@ function App() {
         onFilterEquipment={(equip) => { setFilters({ equipment: [equip], rating: [], format: [], focus: [], search: "" }); setExcludedMovements([]); setScreen("library"); }}
         onFilterRating={(rating) => { setFilters({ equipment: [], rating: [rating], format: [], focus: [], search: "" }); setExcludedMovements([]); setScreen("library"); }}
         onQuickTimer={(params) => { setQuickTimer(quickTimerWorkout(params)); setFullScreenMode(true); }}
+        weeklyPlan={settings.weeklyPlan}
       /></div>}
       {screen === "library" && <div className="screen-fade" key="library">
         <LibraryScreen
@@ -3308,6 +3376,7 @@ function App() {
             ),
             editingId: null,
           })}
+          excludedMovements={excludedMovements}
         />
       </div>}
       {builder && (
@@ -3531,8 +3600,18 @@ function App() {
     </div>
   );
 }
-function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, onFilterRating, onSelectWorkout, onQuickTimer }) {
+function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, onFilterRating, onSelectWorkout, onQuickTimer, weeklyPlan }) {
   const [pickShuffle, setPickShuffle] = useState(0); // Today's Pick shuffle offset (session-only)
+  // Weekly plan progress: sessions logged since Monday vs the plan's slots
+  const weekInfo = useMemo(() => {
+    if (!weeklyPlan || !weeklyPlan.focuses || !weeklyPlan.focuses.length) return null;
+    const monday = new Date();
+    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    monday.setHours(0, 0, 0, 0);
+    const done = logs.filter(l => new Date(l.date) >= monday).length;
+    const target = weeklyPlan.focuses.length;
+    return { done, target, nextFocus: done < target ? weeklyPlan.focuses[done] : null };
+  }, [weeklyPlan, logs]);
   const [qtOpen, setQtOpen] = useState(false);       // Quick Timer setup sheet
   const [qtKind, setQtKind] = useState("amrap");
   const [qtParams, setQtParams] = useState({ minutes: 20, workSeconds: 20, restSeconds: 10, rounds: 8, exerciseSeconds: 30, stations: 4, capMinutes: 0 });
@@ -3632,6 +3711,24 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
         </div>
       </div>
 
+      {/* ── WEEKLY PLAN progress ── */}
+      {weekInfo && (
+        <div className="card-float-2" style={{margin: "0 20px 12px", background: "linear-gradient(135deg, #11203a, #0e1628)", border: "1px solid #3b82f630", borderRadius: DS.radius.xl, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12}}>
+          <span style={{fontSize: 20}}>{"📅"}</span>
+          <div style={{flex: 1}}>
+            <div style={{fontSize: 12, fontWeight: 800, color: "#3b82f6", letterSpacing: 1}}>THIS WEEK: {Math.min(weekInfo.done, weekInfo.target)} OF {weekInfo.target}</div>
+            <div style={{fontSize: 12, color: DS.colors.textSub, marginTop: 2}}>
+              {weekInfo.nextFocus ? <>Next up: <b style={{color: "#fff"}}>{weekInfo.nextFocus}</b></> : "Week complete 💪"}
+            </div>
+          </div>
+          <div style={{display: "flex", gap: 4}}>
+            {Array.from({ length: weekInfo.target }, (_, i) => (
+              <div key={i} style={{width: 10, height: 10, borderRadius: 5, background: i < weekInfo.done ? "#3ddc84" : "#26304a"}} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── TODAY'S PICK — deterministic daily suggestion with shuffle ── */}
       {(() => {
         const sortedLogs = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -3644,11 +3741,21 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
           !recentIds.includes(w.id) && !recentFocuses.includes(w.focus)
         );
         if (candidates.length === 0) candidates = getAllWorkouts();
+        // Weekly plan wins: serve the next slot's focus when it can
+        const planFocus = weekInfo && weekInfo.nextFocus;
+        if (planFocus) {
+          const planMatches = candidates.filter(w => w.focus === planFocus);
+          if (planMatches.length) candidates = planMatches;
+          else {
+            const anyMatches = getAllWorkouts().filter(w => w.focus === planFocus && !recentIds.includes(w.id));
+            if (anyMatches.length) candidates = anyMatches;
+          }
+        }
         const today = new Date(); const seed = today.getFullYear() * 10000 + (today.getMonth()+1) * 100 + today.getDate();
         // pickShuffle is 0 for the stable daily pick; each shuffle tap sets a
         // fresh random offset so the sequence never repeats predictably
         const pick = candidates[(seed + pickShuffle) % candidates.length];
-        const avoidedLabel = recentFocuses.length > 0 ? `Avoids ${recentFocuses[0].toLowerCase()}` : "Fresh every day";
+        const avoidedLabel = planFocus ? `Plan: ${planFocus.toLowerCase()}` : (recentFocuses.length > 0 ? `Avoids ${recentFocuses[0].toLowerCase()}` : "Fresh every day");
         return (
           <div className="card-float-3" style={{margin: "0 20px 20px", background: "linear-gradient(135deg, #1a1a3e, #111128)", border: "1px solid #8b5cf625", borderRadius: DS.radius.xl, padding: 16, position: "relative", overflow: "hidden"}}>
             <div style={{position: "absolute", top: -40, right: -40, width: 120, height: 120, background: "radial-gradient(circle, #8b5cf608 0%, transparent 70%)", pointerEvents: "none"}} />
@@ -4066,7 +4173,7 @@ function LibraryScreen({ workouts, filters, setFilters, showFilters, setShowFilt
           {showExclusions && (
             <div style={{...sty.filterPanel, borderColor: "#ef444440"}}>
               <div style={{fontSize: 13, color: "#ef4444", marginBottom: 4, fontWeight: 600}}>Select movements to EXCLUDE:</div>
-              <div style={{fontSize: 11, color: DS.colors.textMuted, marginBottom: 12}}>Only filters the main workout section — warmup and core are ignored.</div>
+              <div style={{fontSize: 11, color: DS.colors.textMuted, marginBottom: 12}}>Workouts with these movements stay visible — they get a "swap" badge and one-tap alternatives on their detail page.</div>
               <div style={{display: "flex", flexWrap: "wrap", gap: 6}}>
                 {ALL_WORKOUT_MOVEMENTS.map(m => (
                   <button key={m} onClick={() => toggleExclusion(m)} style={{
@@ -4097,6 +4204,11 @@ function LibraryScreen({ workouts, filters, setFilters, showFilters, setShowFilt
                     <div style={{display: "flex", alignItems: "center", gap: 8}}>
                       <div style={{fontFamily: DS.font.display, fontSize: 22, color: "#fff", letterSpacing: 1}}>{w.custom ? w.name : `#${w.id}`}</div>
                       {w.custom && <span style={{fontSize: 9, fontWeight: 800, color: "#8b5cf6", background: "#8b5cf620", border: "1px solid #8b5cf650", borderRadius: DS.radius.pill, padding: "2px 7px", letterSpacing: 1}}>MINE</span>}
+                      {(() => {
+                        if (!excludedMovements || !excludedMovements.length) return null;
+                        const n = excludedMovements.filter(m => w.wm.includes(m)).length;
+                        return n > 0 ? <span style={{fontSize: 9, fontWeight: 800, color: "#eab308", background: "#eab30818", border: "1px solid #eab30850", borderRadius: DS.radius.pill, padding: "2px 7px", letterSpacing: 0.5}}>{n} SWAP{n > 1 ? "S" : ""}</span> : null;
+                      })()}
                       {favs && favs.includes(w.id) && <Icon name="heart" size={14} color="#ef4444" />}
                       {(() => {
                         const wLogs = logs ? logs.filter(l => l.workoutId === w.id) : [];
@@ -4160,7 +4272,7 @@ function FilterSection({ title, items, selected, onToggle, colors }) {
 // ═══════════════════════════════════════════════════════════════
 // WORKOUT DETAIL (with START WORKOUT button + tappable exercises)
 // ═══════════════════════════════════════════════════════════════
-function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout, logs, diffOverrides, onEditLog, fontSizeKey, isFav, onToggleFav, onEditCustom, onDeleteCustom, onDuplicate }) {
+function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout, logs, diffOverrides, onEditLog, fontSizeKey, isFav, onToggleFav, onEditCustom, onDeleteCustom, onDuplicate, excludedMovements }) {
   const [confirmDeleteCustom, setConfirmDeleteCustom] = useState(false);
   const customLogsCount = w.custom ? logs.filter(l => l.workoutId === w.id).length : 0;
   const contentFontSize = (FONT_SIZES[fontSizeKey] || FONT_SIZES.normal).base;
@@ -4383,6 +4495,41 @@ function WorkoutDetail({ workout: w, onExerciseTap, onStartWorkout, onLogWorkout
           </button>
         )}
       </div>
+
+      {/* Injury-aware swaps: excluded movements found in the CURRENT text get
+          a strike-through + same-muscle alternative with one-tap apply */}
+      {excludedMovements && excludedMovements.length > 0 && (() => {
+        const currentText = customWorkout || w.workout;
+        const found = findExercisesInText(currentText);
+        const present = excludedMovements.filter(m => found.includes(m));
+        if (!present.length) return null;
+        return (
+          <div style={{marginBottom: 16, background: "#1a1508", border: "1px solid #eab30840", borderRadius: 14, padding: 14}}>
+            <div style={{fontSize: 12, fontWeight: 800, color: "#eab308", letterSpacing: 1, marginBottom: 6}}>{"⚠"} SWAPS SUGGESTED — on your excluded list</div>
+            {present.map(m => {
+              const alt = getExerciseAlternatives(m).find(a => !excludedMovements.includes(a.key));
+              const mName = EXERCISE_INFO[m] ? EXERCISE_INFO[m].name : m;
+              return (
+                <div key={m} style={{display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #eab30820"}}>
+                  <div style={{flex: 1}}>
+                    <span style={{fontSize: 14, color: "#ef4444", textDecoration: "line-through", fontWeight: 700}}>{mName}</span>
+                    {alt && <span style={{fontSize: 14, color: "#3ddc84", fontWeight: 700}}> {"→"} {alt.name}</span>}
+                    {alt && <div style={{fontSize: 11, color: "#888"}}>{alt.muscles}</div>}
+                  </div>
+                  {alt ? (
+                    <button onClick={() => {
+                      const newText = swapExerciseInText(currentText, m, alt.name);
+                      saveCustomization(w.id, "workout", newText);
+                      setCustomWorkout(newText);
+                    }} style={{background: "#3ddc8420", border: "1px solid #3ddc84", borderRadius: 10, padding: "8px 14px", color: "#3ddc84", fontSize: 12, fontWeight: 800, cursor: "pointer"}}>Swap</button>
+                  ) : <span style={{fontSize: 11, color: "#888"}}>no alternative found</span>}
+                </div>
+              );
+            })}
+            <div style={{fontSize: 10, color: "#666", marginTop: 8}}>Swaps save as edits to this workout — undo anytime via "Reset all customizations".</div>
+          </div>
+        );
+      })()}
 
       {/* Workout sections - now editable with tap-to-edit hint */}
       {(customWarmup || w.warmup) && (
