@@ -52,3 +52,46 @@ export function crossedBoundary(prev, elapsed, step, offset = 0) {
   const lastBoundary = Math.floor((elapsed - offset) / step) * step + offset;
   return lastBoundary > prev;
 }
+
+// ── Circuit position ──
+// A circuit runs a list of equal-length timed exercises for N rounds. By
+// default the rest period comes once per round, after the whole list. An
+// optional `restEvery: k` moves rest to fire after every k exercises — the
+// "30s per exercise, 30s rest after each pair" park-workout pattern. With
+// restEvery absent (or equal to the list length) this reduces exactly to the
+// original one-rest-per-round maths, so existing circuits are unaffected.
+//
+// Returns the position at `elapsed`: which round, which exercise, whether the
+// clock is in a rest period, and seconds left in the current period.
+export function circuitPosition(cfg, elapsed) {
+  const numEx = cfg.exercises ? cfg.exercises.length : 1;
+  const exSec = cfg.exerciseSeconds;
+  const rest = cfg.restSeconds || 0;
+  const groupSize = Math.min(cfg.restEvery || numEx, numEx);
+  const numGroups = Math.ceil(numEx / groupSize);
+  const segLen = groupSize * exSec + rest;      // a full work-group plus its rest
+  const roundLen = numEx * exSec + numGroups * rest;
+
+  const roundIdx = Math.floor(elapsed / roundLen);
+  const withinRound = elapsed % roundLen;
+  // Every group but the last is full, so integer division lands correctly; the
+  // clamp covers a short final group.
+  const groupIdx = Math.min(Math.floor(withinRound / segLen), numGroups - 1);
+  const withinSeg = withinRound - groupIdx * segLen;
+  const groupEx = Math.min(groupSize, numEx - groupIdx * groupSize);
+  const workLen = groupEx * exSec;
+
+  const isRest = withinSeg >= workLen;
+  const exIdx = groupIdx * groupSize + (isRest ? groupEx - 1 : Math.floor(withinSeg / exSec));
+  const secsLeft = isRest ? (workLen + rest - withinSeg) : (exSec - (withinSeg % exSec));
+
+  return { roundIdx, groupIdx, exIdx, isRest, secsLeft, roundLen, numEx };
+}
+
+// Identity of the segment the clock is sitting in. Compare across two elapsed
+// values to detect "we just moved into a new exercise / rest period" in a way
+// that survives clock jumps.
+export function circuitSegmentKey(cfg, elapsed) {
+  const p = circuitPosition(cfg, elapsed);
+  return `${p.roundIdx}:${p.isRest ? "rest" + p.groupIdx : "ex" + p.exIdx}`;
+}

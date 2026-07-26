@@ -71,10 +71,15 @@ const COMPILERS = {
   circuit(b) {
     const exSec = Number(b.exerciseSeconds), rest = Number(b.restSeconds) || 0, rounds = Number(b.rounds);
     const list = exNames(b);
-    const roundLen = list.length * exSec + rest;
+    // restEvery is not exposed in the builder UI, but a stored workout may carry
+    // it (rest after each pair) — keep it through an edit instead of flattening.
+    const every = Number(b.restEvery) || 0;
+    const roundLen = circuitRoundLength(list.length, exSec, rest, every);
+    const restText = rest ? (every ? `, ${rest}s rest after every ${every}` : `, ${rest}s rest between rounds`) : "";
     return {
-      content: `${rounds} rounds - ${exSec}s per exercise${rest ? `, ${rest}s rest between rounds` : ""}\n${list.join(", ")}`,
-      timer: { type: "circuit", exerciseSeconds: exSec, restSeconds: rest, totalSeconds: rounds * roundLen, exercises: list, label: `Timed Circuit — ${list.length} × ${exSec}s` },
+      content: `${rounds} rounds - ${exSec}s per exercise${restText}\n${list.join(", ")}`,
+      timer: { type: "circuit", exerciseSeconds: exSec, restSeconds: rest, ...(every ? { restEvery: every } : {}),
+               totalSeconds: rounds * roundLen, exercises: list, label: `Timed Circuit — ${list.length} × ${exSec}s` },
     };
   },
   rest(b) {
@@ -86,6 +91,14 @@ const COMPILERS = {
     };
   },
 };
+
+// Seconds in one full round of a circuit. Rest normally comes once per round;
+// with restEvery set it comes after every N exercises, so a round pays for
+// several rest periods.
+export function circuitRoundLength(numEx, exerciseSeconds, restSeconds, restEvery = 0) {
+  const groups = restEvery > 0 ? Math.ceil(numEx / restEvery) : 1;
+  return numEx * exerciseSeconds + groups * restSeconds;
+}
 
 // Which numeric fields each kind requires (used by validation and the UI)
 export const KIND_FIELDS = {
@@ -247,8 +260,10 @@ function timerToDraftBlock(block) {
   if (t.type === "emom") return { ...newBlock("emom"), minutes: t.totalMinutes || Math.round((t.totalSeconds || 600) / 60), exercises: exRows };
   if (t.type === "tabata") return { ...newBlock("tabata"), workSeconds: t.workSeconds, restSeconds: t.restSeconds, rounds: t.rounds || "", exercises: exRows };
   if (t.type === "circuit") {
-    const roundLen = (t.exercises || []).length * (t.exerciseSeconds || 30) + (t.restSeconds || 0);
-    return { ...newBlock("circuit"), exerciseSeconds: t.exerciseSeconds, restSeconds: t.restSeconds || 0, rounds: roundLen > 0 && t.totalSeconds ? Math.max(1, Math.round(t.totalSeconds / roundLen)) : "", exercises: exRows };
+    const roundLen = circuitRoundLength((t.exercises || []).length, t.exerciseSeconds || 30, t.restSeconds || 0, t.restEvery || 0);
+    return { ...newBlock("circuit"), exerciseSeconds: t.exerciseSeconds, restSeconds: t.restSeconds || 0,
+             ...(t.restEvery ? { restEvery: t.restEvery } : {}),
+             rounds: roundLen > 0 && t.totalSeconds ? Math.max(1, Math.round(t.totalSeconds / roundLen)) : "", exercises: exRows };
   }
   if (t.type === "stopwatch" && t.capSeconds) {
     return { ...newBlock("fortime"), capMinutes: Math.round(t.capSeconds / 60), exercises: [{ reps: "", name: "" }], refText: block.content };

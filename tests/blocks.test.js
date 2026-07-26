@@ -59,3 +59,46 @@ test("every workout parses without throwing and yields at least one block", () =
     for (const b of blocks) assert.ok(b.timer && b.timer.type, `#${w.id} block missing timer`);
   }
 });
+
+// ── metres vs minutes ──
+// "400M run" is a distance. Read as 400 MINUTES it produced circuits running
+// for forty hours across ~20 workouts.
+
+test("a bare 'm' after a large number is metres, not minutes", () => {
+  const t = detectBlockTimer("6 * 400M w 30s Deadhang");
+  assert.equal(t.type, "stopwatch", "a 400m interval run is not a timed circuit");
+});
+
+test("rounds of reps ending in a run stay a stopwatch", () => {
+  const t = detectBlockTimer("6 rounds - 30s rest\n10 KB Swings, 3 KB Turkish Get-Up ea side, 400M run");
+  assert.equal(t.type, "stopwatch");
+});
+
+test("a bare 'm' after a small number is still minutes", () => {
+  const t = detectBlockTimer("3 rounds - 1m plank, 30s rest");
+  assert.equal(t.type, "circuit");
+  assert.equal(t.exerciseSeconds, 60);
+});
+
+// ── "ea side" is two timed efforts ──
+
+test("#197 core: side plank each side gets a period per side", () => {
+  const t = parseBlocks(byId(197).core)[0].timer;
+  assert.equal(t.type, "circuit");
+  assert.deepEqual(t.exercises, ["Plank", "Side Plank (L)", "Side Plank (R)", "Hollow Hold"]);
+  assert.equal(t.totalSeconds, 3 * 4 * 30, "3 rounds x 4 x 30s = 6 min, not 4.5");
+});
+
+test("rep-based 'ea side' items are not split (only timed ones are)", () => {
+  const t = detectBlockTimer("3 rounds - 30s Plank, 12 KB Rows ea arm");
+  assert.deepEqual(t.exercises, ["Plank"]);
+});
+
+// ── "40s/20s" with unit letters ──
+
+test("interval written with unit letters is still a tabata", () => {
+  const t = detectBlockTimer("3 Rounds (40s/20s) - Thrusters, Skull Crushers, DB Rows");
+  assert.equal(t.type, "tabata");
+  assert.equal(t.workSeconds, 40);
+  assert.equal(t.restSeconds, 20);
+});

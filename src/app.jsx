@@ -4,7 +4,7 @@ import { CATEGORY_PATTERNS, EXERCISE_INFO } from "./data/exercises.js";
 import { RAW_DATA, DIFFICULTY_COLORS, EQUIPMENT_ICONS, ALL_EQUIPMENT, ALL_RATINGS, ALL_FORMATS, ALL_FOCUSES, ALL_MOVEMENTS, ALL_WORKOUT_MOVEMENTS } from "./data/workouts.js";
 import { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech, speakDuration } from "./engine/voice.js";
 import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
-import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary } from "./engine/timer.js";
+import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey } from "./engine/timer.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 import { WORKOUT_BLOCKS } from "./data/blocks.js";
 import { exerciseMatchers, describePhrase, findExercisesInText, swapExerciseInText } from "./engine/exercises-match.js";
@@ -710,15 +710,14 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       }
     }
     if (cfg.type === "circuit") {
-      const numEx = cfg.exercises ? cfg.exercises.length : 1;
-      const roundLen = numEx * cfg.exerciseSeconds + cfg.restSeconds;
-      const withinRound = elapsed % roundLen;
-      const workPeriod = numEx * cfg.exerciseSeconds;
-      const isRest = withinRound >= workPeriod;
-      const withinEx = withinRound % cfg.exerciseSeconds;
-      const exIdx = isRest ? numEx - 1 : Math.floor(withinRound / cfg.exerciseSeconds);
-      const roundIdx = Math.floor(elapsed / roundLen);
+      const { roundIdx, exIdx, isRest, secsLeft } = circuitPosition(cfg, elapsed);
+      const wasRest = elapsed > 0 && circuitPosition(cfg, prev).isRest;
       const exName = cfg.exercises && cfg.exercises[exIdx] ? cfg.exercises[exIdx] : null;
+      // With restEvery set, rest lands mid-round, so "next up" is the next
+      // exercise in the list rather than the top of the round.
+      const nextAfterRest = cfg.exercises
+        ? (cfg.restEvery ? cfg.exercises[(exIdx + 1) % cfg.exercises.length] : cfg.exercises[0])
+        : null;
       // Coaching: halfway + final-minute (before the segment announcements
       // below so those win a speech collision)
       const circHalf = Math.floor(cfg.totalSeconds / 2);
@@ -730,16 +729,16 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       }
       // Completion beep (crossing-safe)
       if (doBeep && prev < cfg.totalSeconds && elapsed >= cfg.totalSeconds) { beepFinish(); tryVibrate([200,100,200,100,400]); }
-      // Start of rest period (crossing-safe)
-      if (cfg.restSeconds > 0 && crossedBoundary(prev, elapsed, roundLen, workPeriod)) {
+      // Segment identity — changes on every exercise change and on entering rest
+      const segChanged = elapsed > 0 && circuitSegmentKey(cfg, elapsed) !== circuitSegmentKey(cfg, prev);
+      // Start of rest period
+      if (cfg.restSeconds > 0 && isRest && !wasRest && segChanged) {
         if (doBeep) { beepRest(); tryVibrate(200); }
-        const nextRoundEx = coach.nextPreview && cfg.exercises && cfg.exercises[0];
-        speakText(nextRoundEx ? `Rest. Next round: ${nextRoundEx}` : `Rest`, voiceEnabled, audio);
+        const preview = coach.nextPreview && nextAfterRest;
+        speakText(preview ? `Rest. Next: ${preview}` : `Rest`, voiceEnabled, audio);
       }
-      // Start of a new exercise within the round (crossing-safe: fire when the
-      // exercise segment identity changes; announces the CURRENT exercise once)
-      const exKey = (e) => { const wr = e % roundLen; return wr >= workPeriod ? -1 : Math.floor(e / roundLen) * 1000 + Math.floor(wr / cfg.exerciseSeconds); };
-      if (!isRest && elapsed > 0 && exKey(elapsed) !== exKey(prev)) {
+      // Start of a new exercise (announces the CURRENT exercise once)
+      if (!isRest && segChanged) {
         if (doBeep) { beepWork(); tryVibrate([100,50,100]); }
         const isRoundStart = exIdx === 0;
         const msg = isRoundStart ? `Round ${roundIdx + 1}. ${exName || ''}` : (exName || '');
@@ -747,11 +746,10 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       }
       // Very first tick — announce round 1 and first exercise (skip if a clock
       // jump already fired the segment-change branch above)
-      if (prev === 0 && elapsed >= 1 && exName && exKey(elapsed) === exKey(prev)) {
+      if (prev === 0 && elapsed >= 1 && exName && !segChanged) {
         speakText(`Round 1. ${exName}`, voiceEnabled, audio);
       }
       // Last 3 seconds of each exercise period or rest period
-      const secsLeft = isRest ? (roundLen - withinRound) : (cfg.exerciseSeconds - withinEx);
       if (doBeep && secsLeft >= 1 && secsLeft <= 3) beep321();
     }
   }, [elapsed, audio, cfg, voiceEnabled]);
@@ -904,18 +902,16 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
     );
   }
   
-  // ── CORE CIRCUIT — consecutive timed exercises, rest between rounds only ──
+  // ── CIRCUIT — consecutive timed exercises, resting once per round or,
+  //    with restEvery set, after every N exercises (e.g. after each pair) ──
   if (cfg.type === "circuit") {
-    const numEx = cfg.exercises ? cfg.exercises.length : 1;
-    const roundLen = numEx * cfg.exerciseSeconds + cfg.restSeconds;
-    const withinRound = elapsed % roundLen;
-    const workPeriod = numEx * cfg.exerciseSeconds;
-    const isRest = withinRound >= workPeriod;
-    const exIdx = isRest ? numEx - 1 : Math.floor(withinRound / cfg.exerciseSeconds);
-    const secsLeft = isRest ? (roundLen - withinRound) : (cfg.exerciseSeconds - (withinRound % cfg.exerciseSeconds));
-    const roundIdx = Math.floor(elapsed / roundLen);
+    const { roundIdx, exIdx, isRest, secsLeft, numEx } = circuitPosition(cfg, elapsed);
     const done = elapsed >= cfg.totalSeconds;
     const exName = cfg.exercises && cfg.exercises[exIdx] ? cfg.exercises[exIdx] : null;
+    // Mid-round rest points to the next exercise; end-of-round rest to the top.
+    const nextAfterRest = cfg.exercises
+      ? (cfg.restEvery ? cfg.exercises[(exIdx + 1) % cfg.exercises.length] : cfg.exercises[0])
+      : null;
     const activeCol = isRest ? oRest : oWork;
     const pct = Math.min(100, (elapsed / cfg.totalSeconds) * 100);
     return (
@@ -935,10 +931,10 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
                 {exName}
               </div>
             )}
-            {/* During rest — show first exercise of next round */}
+            {/* During rest — show what comes next */}
             {isRest && cfg.restSeconds > 0 && (
               <div style={{fontSize: Math.max(18, fs.exercise - 2), fontWeight: 700, color: oSub, padding: "6px 16px", marginTop: 4}}>
-                Next round: <span style={{color: oText}}>{cfg.exercises ? cfg.exercises[0] : ''}</span>
+                {cfg.restEvery ? "Next: " : "Next round: "}<span style={{color: oText}}>{nextAfterRest || ''}</span>
               </div>
             )}
             {/* Big countdown */}

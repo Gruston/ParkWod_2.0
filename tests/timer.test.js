@@ -4,10 +4,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createTimerState, timerStart, timerPause, timerIsRunning,
-  computeElapsed, crossedBoundary,
+  computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey,
 } from "../src/engine/timer.js";
 
 const T0 = 1_000_000_000_000; // arbitrary wall-clock origin
+
+// the fields a circuit display actually reads
+const pick = p => ({ roundIdx: p.roundIdx, exIdx: p.exIdx, isRest: p.isRest, secsLeft: p.secsLeft });
 
 test("fresh timer: not running, elapsed 0", () => {
   const s = createTimerState();
@@ -101,4 +104,65 @@ test("crossedBoundary: never fires before the first boundary or backwards", () =
   assert.equal(crossedBoundary(0, 30, 60, 60), false);
   assert.equal(crossedBoundary(30, 30, 60, 60), false);
   assert.equal(crossedBoundary(60, 50, 60, 60), false); // non-monotonic guard
+});
+
+// ── circuitPosition ──
+// A circuit runs equal-length timed exercises for N rounds, resting once per
+// round — or, with restEvery, after every N exercises.
+
+const CIRCUIT = { exerciseSeconds: 30, restSeconds: 30, rounds: 3, exercises: ["A", "B", "C"] };
+
+test("circuitPosition: walks exercises then rests once per round", () => {
+  const at = e => circuitPosition(CIRCUIT, e);
+  assert.deepEqual(pick(at(0)), { roundIdx: 0, exIdx: 0, isRest: false, secsLeft: 30 });
+  assert.deepEqual(pick(at(29)), { roundIdx: 0, exIdx: 0, isRest: false, secsLeft: 1 });
+  assert.deepEqual(pick(at(30)), { roundIdx: 0, exIdx: 1, isRest: false, secsLeft: 30 });
+  assert.deepEqual(pick(at(60)), { roundIdx: 0, exIdx: 2, isRest: false, secsLeft: 30 });
+  // 90s of work, then the round's single rest
+  assert.deepEqual(pick(at(90)), { roundIdx: 0, exIdx: 2, isRest: true, secsLeft: 30 });
+  assert.deepEqual(pick(at(119)), { roundIdx: 0, exIdx: 2, isRest: true, secsLeft: 1 });
+  // round 2 starts at 120s
+  assert.deepEqual(pick(at(120)), { roundIdx: 1, exIdx: 0, isRest: false, secsLeft: 30 });
+});
+
+const PAIRS = { exerciseSeconds: 30, restSeconds: 30, restEvery: 2, rounds: 1,
+                exercises: ["A", "B", "C", "D", "E", "F"] };
+
+test("circuitPosition: restEvery rests after each pair, mid-round", () => {
+  const at = e => circuitPosition(PAIRS, e);
+  assert.deepEqual(pick(at(0)),  { roundIdx: 0, exIdx: 0, isRest: false, secsLeft: 30 });
+  assert.deepEqual(pick(at(30)), { roundIdx: 0, exIdx: 1, isRest: false, secsLeft: 30 });
+  // rest after the first pair, NOT after the whole list
+  assert.deepEqual(pick(at(60)), { roundIdx: 0, exIdx: 1, isRest: true, secsLeft: 30 });
+  assert.deepEqual(pick(at(90)), { roundIdx: 0, exIdx: 2, isRest: false, secsLeft: 30 });
+  assert.deepEqual(pick(at(150)), { roundIdx: 0, exIdx: 3, isRest: true, secsLeft: 30 });
+  assert.deepEqual(pick(at(180)), { roundIdx: 0, exIdx: 4, isRest: false, secsLeft: 30 });
+  // 6 exercises + 3 rests = 270s; the round ends exactly there
+  assert.deepEqual(pick(at(240)), { roundIdx: 0, exIdx: 5, isRest: true, secsLeft: 30 });
+  assert.equal(circuitPosition(PAIRS, 270).roundIdx, 1);
+});
+
+test("circuitPosition: restEvery equal to the list length is the plain circuit", () => {
+  const explicit = { ...CIRCUIT, restEvery: 3 };
+  for (const e of [0, 29, 30, 60, 90, 119, 120, 200, 359]) {
+    assert.deepEqual(circuitPosition(explicit, e), circuitPosition(CIRCUIT, e), `elapsed ${e}`);
+  }
+});
+
+test("circuitPosition: handles a trailing odd exercise", () => {
+  const odd = { exerciseSeconds: 30, restSeconds: 30, restEvery: 2, rounds: 1, exercises: ["A", "B", "C"] };
+  assert.deepEqual(pick(circuitPosition(odd, 60)), { roundIdx: 0, exIdx: 1, isRest: true, secsLeft: 30 });
+  assert.deepEqual(pick(circuitPosition(odd, 90)), { roundIdx: 0, exIdx: 2, isRest: false, secsLeft: 30 });
+  // the short final group still gets its rest, then the round rolls over
+  assert.deepEqual(pick(circuitPosition(odd, 120)), { roundIdx: 0, exIdx: 2, isRest: true, secsLeft: 30 });
+  assert.equal(circuitPosition(odd, 150).roundIdx, 1);
+});
+
+test("circuitSegmentKey: changes exactly once per exercise and per rest", () => {
+  const keys = [];
+  for (let e = 0; e < 270; e++) keys.push(circuitSegmentKey(PAIRS, e));
+  const transitions = keys.filter((k, i) => i === 0 || k !== keys[i - 1]);
+  // 6 exercises + 3 rests in one round
+  assert.equal(transitions.length, 9);
+  assert.equal(new Set(transitions).size, 9);
 });

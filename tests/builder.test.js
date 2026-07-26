@@ -230,3 +230,17 @@ test("duration estimate is sane and card-friendly", () => {
   assert.ok(w.duration >= 20 && w.duration <= 35);
   assert.equal(w.duration % 5, 0);
 });
+
+test("a pair-rest circuit survives a builder round-trip", () => {
+  // Opening #36 in the builder and recompiling must not flatten its timed pair
+  // circuit (12 exercises, 30s each, 30s rest after every pair = 9 min).
+  const w = RAW_DATA.find(x => x.id === 36);
+  const draft = draftFromWorkout(w, WORKOUT_BLOCKS[36].workout, WORKOUT_BLOCKS[36].core);
+  const pair = draft.blocks.find(b => b.kind === "circuit");
+  assert.equal(pair.restEvery, 2);
+  assert.equal(pair.rounds, 1, "rounds must account for the six rest periods, not one");
+
+  const back = compileWorkout(draft, "c2").blocks.workout.find(b => b.timer.type === "circuit").timer;
+  assert.equal(back.restEvery, 2);
+  assert.equal(back.totalSeconds, 540, "9 min, unchanged by the round-trip");
+});

@@ -241,7 +241,8 @@ function detectBlockTimer(text) {
   
   // TABATA — explicit keyword OR work/rest interval patterns
   const hasTabataWord = /TABATA/i.test(upper);
-  const intervalMatch = upper.match(/(\d+)\s*[/\\]\s*(\d+)/) ||
+  // "40/20" and "40s/20s" both mean 40 seconds work, 20 seconds rest
+  const intervalMatch = upper.match(/(\d+)\s*S?\s*[/\\]\s*(\d+)\s*S?\b/) ||
                          upper.match(/(\d+)\s*S(?:EC)?\s*ON\s*[/,]?\s*(\d+)\s*S(?:EC)?\s*(?:OFF|REST)/i) ||
                          upper.match(/(\d+)\s*SEC?\s*ON\s*(\d+)\s*(?:OFF|REST)/i) ||
                          upper.match(/(\d+)\s*S(?:EC)?\s*WORK\s*[/,]?\s*(\d+)\s*S(?:EC)?\s*(?:OFF|REST)/i);
@@ -311,7 +312,13 @@ function detectBlockTimer(text) {
       const m = (str || '').trim().match(/^(\d+(?:\.\d+)?)\s*(min(?:ute)?|m(?=\s|$)|s(?:ec(?:ond)?)?)/i);
       if (!m) return null;
       const n = parseFloat(m[1]);
-      return /^m/i.test(m[2]) ? Math.round(n * 60) : Math.round(n);
+      const isMin = /^m/i.test(m[2]);
+      // A bare "m" is metres, not minutes, once the number gets large: "400M run"
+      // and "10M bear crawl" are distances, "2m plank" is a duration. Nobody
+      // holds a position for ten-plus minutes and nobody writes a sub-10-metre
+      // distance, so the magnitude separates them cleanly. "min" is unambiguous.
+      if (isMin && !/^min/i.test(m[2]) && n >= 10) return null;
+      return isMin ? Math.round(n * 60) : Math.round(n);
     }
 
     let cRounds = null, cBody = text.trim(), cTrailingRest = 0;
@@ -359,9 +366,18 @@ function detectBlockTimer(text) {
           const dm = pt.match(/^(\d+(?:\.\d+)?)\s*(s(?:ec(?:ond)?)?|min(?:ute)?|m(?=\s))\s+(.+)/i);
           if (dm) {
             const dur = parseDur(dm[1] + ' ' + dm[2]);
-            if (dur) { cExSecs = dur; hasTimedEx = true; }
-            const name = dm[3].replace(/\(.*?\)/g, '').replace(/\s+ea\.?\s*(side)?/i, ' ea').trim();
-            if (name.length > 1) cExercises.push(name);
+            // No duration means the number was a distance ("400M run") — that is
+            // work, but not timed work, so it is not a station on this clock.
+            if (!dur) continue;
+            cExSecs = dur; hasTimedEx = true;
+            const name = dm[3].replace(/\(.*?\)/g, '').trim();
+            // "30s Side Plank ea side" is TWO timed efforts, not one — the clock
+            // must give each side its own period or the round runs 30s short.
+            const sideM = name.match(/^(.*?)[\s,]*\b(?:ea|each)\.?\s*(?:side|arm|leg)s?\b\s*$/i);
+            if (sideM && sideM[1].trim().length > 1) {
+              const base = sideM[1].trim();
+              cExercises.push(`${base} (L)`, `${base} (R)`);
+            } else if (name.length > 1) cExercises.push(name);
             continue;
           }
           // Skip rep-only items ("15 V-ups") — number followed by exercise but no time unit
