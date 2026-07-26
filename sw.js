@@ -6,21 +6,27 @@
 //     from the last cached copy. No more manual cache-version bumps.
 //   - Everything else (icons, fonts, manifest): CACHE-FIRST with runtime
 //     fill — fast and offline-safe.
-const CACHE_NAME = 'parkwod-v12'; // final manual bump; updates now flow automatically
+const CACHE_NAME = 'parkwod-v13';
 
+// Paths are RELATIVE, resolved against this script's URL. The app is served
+// from a project subpath (/ParkWod_2.0/), so absolute paths like '/app.js'
+// point at the domain root and 404 — which used to reject cache.addAll and
+// leave the worker permanently uninstalled, pinning users to an old build.
 const PRECACHE = [
-  '/',
-  '/index.html',
-  '/app.js',
-  '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png'
+  './',
+  './index.html',
+  './app.js',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(PRECACHE))
+      // Cache each entry independently: one missing asset degrades offline
+      // support for that file instead of failing the whole install.
+      .then(cache => Promise.all(PRECACHE.map(p => cache.add(p).catch(() => {}))))
       .then(() => self.skipWaiting())
   );
 });
@@ -48,7 +54,14 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-  const isAppCode = request.mode === 'navigate' || url.pathname === '/app.js' || url.pathname === '/index.html' || url.pathname === '/';
+  // Compare against the registration scope, not the domain root — on a project
+  // subpath the app's own files live at /ParkWod_2.0/app.js, and testing for
+  // '/app.js' silently sent app code down the cache-first path below.
+  const scopePath = new URL(self.registration.scope).pathname;
+  const rel = url.origin === self.location.origin && url.pathname.startsWith(scopePath)
+    ? url.pathname.slice(scopePath.length).replace(/^\//, '')
+    : null;
+  const isAppCode = request.mode === 'navigate' || rel === '' || rel === 'app.js' || rel === 'index.html';
 
   if (isAppCode) {
     // Network-first: fresh code when online, cached app when offline
@@ -57,7 +70,7 @@ self.addEventListener('fetch', event => {
         .then(response => cachePut(request, response))
         .catch(() =>
           caches.match(request).then(cached =>
-            cached || caches.match('/index.html')
+            cached || caches.match('./index.html')
           )
         )
     );
