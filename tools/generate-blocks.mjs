@@ -53,6 +53,32 @@ const timedRun = (exercises, exerciseSeconds = 30) => ({
   label: `Timed Circuit — ${exercises.length} × ${exerciseSeconds}s`,
 });
 
+// A core circuit that gives EVERY move in the round its own clock segment.
+//
+// The parser only picks up moves written as a duration ("30s Plank"), so in a
+// round like "30 Russian Twist, 20 Bicycle Crunch, 30s Plank" it built a
+// circuit of one exercise: the clock timed the plank, declared the round done
+// after 30s, and the rep work never existed as far as the timer or the voice
+// were concerned. Reported for #139 (flutter kicks missing from the core
+// timer) and true of thirty more sessions.
+//
+// The rep counts stay in the block text as the target to hit inside the
+// window; the clock's job is to run the whole round, not just its held parts.
+const coreCircuit = (exercises, rounds, { exerciseSeconds = 30, restSeconds = 0 } = {}) => ({
+  type: "circuit", exerciseSeconds, restSeconds, rounds, exercises,
+  totalSeconds: rounds * (exercises.length * exerciseSeconds + restSeconds),
+  label: `Core Circuit — ${rounds} Rounds`,
+});
+
+// Classic station-major tabata: every exercise is worked for `rounds` cycles
+// before the list moves on.
+const tabata = (exercises, rounds, workSeconds = 40, restSeconds = 20) => ({
+  type: "tabata", workSeconds, restSeconds, rounds, stations: exercises.length,
+  exercises, label: `Tabata ${workSeconds}s/${restSeconds}s`,
+});
+
+const countdown = (seconds, label) => ({ type: "countdown", totalSeconds: secs(seconds), label });
+
 const stopwatch = (label = "Rounds") => ({ type: "stopwatch", label });
 
 const CORRECTIONS = {
@@ -131,7 +157,6 @@ const CORRECTIONS = {
   100: { splits: [2, 4] },
   101: { splits: [2] },
   160: { splits: [3] },
-  190: { splits: [2] },
   197: { splits: [3] },
   202: { splits: [2] },
 
@@ -147,6 +172,97 @@ const CORRECTIONS = {
   //    the side planks and silently drop the rep work, so count up instead ──
   132: { coreTimers: { 0: stopwatch("Rounds") } },
   147: { coreTimers: { 0: stopwatch("Rounds") } },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Reported September 2026
+  // ═══════════════════════════════════════════════════════════════
+
+  // ── #65: tempo work needs the tempo, not a 2-second blip ──
+  // "7 Tempo Shoulder press (3s up, 3s hold, 2s down)" parsed into a 2-second
+  // circuit of three fragments of the bracket text, so a set was over before
+  // the first rep was. One rep is 3 up + 3 hold + 2 down + 2 resting at the
+  // bottom = 10s, seven reps to a set, five sets.
+  65: { timers: { 0: {
+    type: "circuit", exerciseSeconds: 10, restSeconds: 0, rounds: 5,
+    exercises: ["Rep 1", "Rep 2", "Rep 3", "Rep 4", "Rep 5", "Rep 6", "Rep 7"],
+    totalSeconds: secs(350), label: "Tempo Press — 5 sets × 7 reps",
+  } } },
+
+  // ── #91 / #92: 8 exercises twice, rest, then the second eight ──
+  // Both sessions fused two separate eights into one 16-station tabata and ran
+  // it for four rounds — 64 minutes of work in a 46-minute session. Each block
+  // is its own phase: 8 exercises × 2 rounds × 60s = 16 min, then a real
+  // one-minute rest, then the second block.
+  91: { splits: [2, 3, 5], timers: {
+    0: tabata(["Jump Squats", "High knees", "Mountain Climber", "Burpees", "Skaters", "Jump Lunge", "Tuck Jumps", "Fast Feet"], 2),
+    1: countdown(60, "Rest — 1 Min"),
+    2: tabata(["Push-up", "Shoulder taps", "Incline Push-up", "Superman", "Situp", "Bicycle Crunch", "Leg Raise", "Plank"], 2),
+    3: stopwatch("Timer"),
+  } },
+  // (#92 has no suicides tail, so it ends at the second block)
+  92: { splits: [2, 3], timers: {
+    0: tabata(["Squats", "Wallsit", "Glute bridge", "Rev Lunges", "Sumo Sq", "Calf raise", "SQ hold", "Jump SQ"], 2),
+    1: countdown(60, "Rest — 1 Min"),
+    2: tabata(["Burpees", "Pushup", "Rows", "Plank Jacks", "Lateral Lunge", "Tuck Jump", "Mountain Cl", "Fastfeet to Burpee"], 2),
+  } },
+
+  // ── timed blocks whose exercise list the parser mangled ──
+  // Each of these fed the timer and the voice a fragment of the format header
+  // instead of the exercises, so the block announced nonsense or nothing.
+  52:  { coreTimers: { 0: tabata(["Plank", "Crunch", "Hollowhold"], 2) } },
+  // "4 min at 20:10" is 8 cycles, so: 8 rounds of situps, then 8 of leg raises
+  70:  { coreTimers: { 0: tabata(["Situps", "Leg Raises"], 8, 20, 10) } },
+  73:  { timers: { 0: { type: "emom", totalSeconds: secs(600), totalMinutes: 10,
+         exercises: ["10 Heavy SQ"], label: "EMOM 10 Min" } } },
+  142: { timers: { 0: tabata(["DB Curls", "DB Push Press", "Burpees", "Step-ups w DB",
+         "Mountain Climbers", "DB SQ", "Dips", "Skipping"], 3) },
+         coreTimers: { 0: coreCircuit(["Plank", "Rev Crunch", "Ankle Touches"], 3) } },
+  // 9 rounds of a 3-minute cycle is 27 minutes, not the 36 the parser counted
+  146: { timers: { 0: { type: "emom", totalSeconds: secs(1620), totalMinutes: 27,
+         exercises: ["5 DB Thrusters + 30 Skips", "8 DB Renegade Rows + 4 Burpees", "10 DB SQ + 5 Box Jumps"],
+         label: "EMOM 27 Min" } } },
+  182: { timers: { 0: tabata(["DB Lateral Raise", "Step-ups w DB", "DB Renegade Row", "Jump Lunges",
+         "DB Curls", "Mountain Climbers", "DB SQ", "Burpees"], 4) },
+         coreTimers: { 0: coreCircuit(["Plank", "Bicycle Crunch", "Leg Raises"], 3) } },
+  206: { timers: { 0: tabata(["DB Bear Complex", "Step-ups", "DB Rows", "Broad Jumps",
+         "DB Curls", "Mountain Climbers", "Push-ups", "Skipping"], 4) },
+         coreTimers: { 0: coreCircuit(["Plank", "Rev Crunch", "Ankle Touches"], 3) } },
+
+  // ── a rounds circuit built around a lap run: nothing here fits a 30s clock ──
+  99:  { timers: { 0: stopwatch("Rounds") } },
+
+  // ── core rounds where the clock timed only the held moves ──
+  // See coreCircuit above. Every move in the round now gets its own 30s
+  // segment, so the circuit runs the whole round and the voice calls all of it.
+  85:  { coreTimers: { 0: coreCircuit(["situps", "leg raises", "plank-ups", "planks"], 2) } },
+  110: { coreTimers: { 0: coreCircuit(["Russian Twist", "Bicycle Crunch", "Plank"], 2) } },
+  112: { coreTimers: { 0: coreCircuit(["Leg Raises", "Bicycle Crunches", "Plank"], 3) } },
+  113: { coreTimers: { 0: coreCircuit(["Plank", "Russian Twist", "V-Up"], 2) } },
+  127: { coreTimers: { 0: coreCircuit(["Rev Crunch", "Cycle Crunch", "Plank"], 3) } },
+  131: { coreTimers: { 0: coreCircuit(["Plank", "Side Plank L", "Side Plank R", "V-ups"], 3) } },
+  133: { coreTimers: { 0: coreCircuit(["Plank", "Reverse Crunches", "Ankle Touches"], 3) } },
+  136: { coreTimers: { 0: coreCircuit(["Plank", "Bicycle Crunch", "Leg Raises"], 3) } },
+  138: { coreTimers: { 0: coreCircuit(["Situps", "Flutter Kicks", "Plank"], 3) } },
+  // the reported one: flutter kicks were missing from the core timer
+  139: { coreTimers: { 0: coreCircuit(["Plank", "Side Plank (L)", "Side Plank (R)", "Hollow Hold", "Flutter Kicks"], 2) } },
+  144: { coreTimers: { 0: coreCircuit(["Plank", "Bicycle Crunch", "Leg Raises"], 3) } },
+  151: { coreTimers: { 0: coreCircuit(["Plank", "Cycle Crunch", "Flutter Kicks"], 3) } },
+  153: { coreTimers: { 0: coreCircuit(["Situps", "Bicycle Crunch", "Plank"], 2) } },
+  154: { coreTimers: { 0: coreCircuit(["Plank", "Russian Twist", "V-Ups"], 3) } },
+  164: { coreTimers: { 0: coreCircuit(["Plank", "Bicycle Crunch", "Hollow Hold"], 3) } },
+  169: { coreTimers: { 0: coreCircuit(["Plank", "Hollow Hold", "Leg Raises"], 3) } },
+  174: { coreTimers: { 0: coreCircuit(["Plank", "Cycle Crunch", "Flutter Kicks"], 3) } },
+  176: { coreTimers: { 0: coreCircuit(["Plank", "Copenhagen Plank L", "Copenhagen Plank R"], 3) } },
+  180: { coreTimers: { 0: coreCircuit(["Plank", "Hollow Body Rocks", "Side Plank (L)", "Side Plank (R)"], 3) } },
+  181: { coreTimers: { 0: coreCircuit(["Situps", "V-Ups", "Plank"], 3) } },
+  186: { coreTimers: { 0: coreCircuit(["Plank", "V-Ups", "Bicycle Crunch"], 2) } },
+  188: { coreTimers: { 0: coreCircuit(["Plank", "Cycle Crunch", "Flutter Kicks"], 3) } },
+  190: { splits: [2], coreTimers: { 0: coreCircuit(["Plank", "Reverse Crunch", "Ankle Touches"], 3) } },
+  192: { coreTimers: { 0: coreCircuit(["Plank", "Copenhagen Plank L", "Copenhagen Plank R"], 3) } },
+  195: { coreTimers: { 0: coreCircuit(["Plank", "Cycle Crunch", "Flutter Kicks"], 3) } },
+  196: { coreTimers: { 0: coreCircuit(["Plank", "Side Plank (L)", "Side Plank (R)", "Bicycle Crunch"], 3) } },
+  201: { coreTimers: { 0: coreCircuit(["Situps", "V-Ups", "Plank"], 3) } },
+  203: { coreTimers: { 0: coreCircuit(["Plank", "Side Plank (L)", "Side Plank (R)", "Bicycle Crunch"], 3) } },
 };
 
 // Re-split a workout's prose at the declared line indices, running the parser

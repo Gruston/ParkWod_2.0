@@ -4,7 +4,8 @@ import { CATEGORY_PATTERNS, EXERCISE_INFO } from "./data/exercises.js";
 import { RAW_DATA, DIFFICULTY_COLORS, EQUIPMENT_ICONS, ALL_EQUIPMENT, ALL_RATINGS, ALL_FORMATS, ALL_FOCUSES, ALL_MOVEMENTS, ALL_WORKOUT_MOVEMENTS } from "./data/workouts.js";
 import { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech, speakDuration } from "./engine/voice.js";
 import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
-import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey } from "./engine/timer.js";
+import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration } from "./engine/timer.js";
+import { toLocalDate, localDateKey, localDateKeyOffset, daysBetweenLocal } from "./engine/dates.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 import { WORKOUT_BLOCKS } from "./data/blocks.js";
 import { exerciseMatchers, describePhrase, findExercisesInText, swapExerciseInText } from "./engine/exercises-match.js";
@@ -159,7 +160,12 @@ const FONT_SIZES = {
   xlarge: { label: "X-Large", base: 24, timer: 80, exercise: 28, sample: "Low vision friendly" },
   xxlarge: { label: "XXL", base: 28, timer: 90, exercise: 32, sample: "Maximum readability" },
 };
-const DEFAULT_SETTINGS = { fontSize: "normal", voiceEnabled: false, outdoorMode: false, audioDefault: true, displayName: "", voiceHalfway: true, voiceFinalMinute: true, voiceNextPreview: true };
+// leadInSeconds — the "GET READY" window before a timed block's clock starts.
+// 5s was not enough to read a new block and get into position, so the first
+// exercise was always already underway; 15s is the floor that makes a section
+// change usable outdoors.
+const DEFAULT_SETTINGS = { fontSize: "normal", voiceEnabled: false, outdoorMode: false, audioDefault: true, displayName: "", voiceHalfway: true, voiceFinalMinute: true, voiceNextPreview: true, leadInSeconds: 15 };
+const LEAD_IN_CHOICES = [5, 10, 15, 20, 30];
 
 function loadSettings() {
   return { ...DEFAULT_SETTINGS, ...loadData("settings", {}) };
@@ -588,13 +594,23 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
   const oBg = outdoor ? "#ffffff" : "transparent";
   const oTimerBlock = { ...ts.timerBlock, background: oBg };
   
-  // ── 5-SECOND COUNTDOWN OVERLAY ──
+  // ── LEAD-IN COUNTDOWN OVERLAY ──
+  // Names the first exercise as well as the clock. Switching sections used to
+  // mean pressing next and then racing to read the block before it started —
+  // showing what opens the block is the other half of making that window
+  // usable. The full block text stays on screen below this.
+  const leadInFirst = cfg.exercises && cfg.exercises.length ? cfg.exercises[0] : null;
   if (countdownLeft > 0) {
     return (
       <div style={{...oTimerBlock, padding: "24px 20px 16px"}}>
         <div style={{fontSize: 13, fontWeight: 700, color: oSub, letterSpacing: 2, marginBottom: 8}}>GET READY</div>
-        <div style={{fontSize: 100, fontWeight: 900, color: oWork, lineHeight: 1, fontVariantNumeric: "tabular-nums"}}>{countdownLeft}</div>
+        <div style={{fontSize: 100, fontWeight: 900, color: countdownLeft <= 5 ? oWork : oText, lineHeight: 1, fontVariantNumeric: "tabular-nums"}}>{countdownLeft}</div>
         <div style={{fontSize: 14, color: oSub, marginTop: 10}}>{cfg.label}</div>
+        {leadInFirst && (
+          <div style={{fontSize: Math.max(20, fs.exercise), fontWeight: 800, color: oText, marginTop: 10, padding: "8px 20px", background: oWork + "18", borderRadius: 12, display: "inline-block", lineHeight: 1.2}}>
+            Starts with: {leadInFirst}
+          </div>
+        )}
       </div>
     );
   }
@@ -607,7 +623,21 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
     if (elapsed === 0 || elapsed === prev) return;
     // Beeps only when audio is on
     const doBeep = audio;
-    
+
+    // ── Stop cueing once the block's programmed work is done ──
+    // The clock keeps counting (the display shows COMPLETE, and overtime on an
+    // AMRAP is worth seeing), but every cue below must fall silent. Without
+    // this the position maths simply wraps: a finished 2-round core circuit
+    // rolled into a phantom round 3 and kept beeping and calling out
+    // exercises — the timer "continuing" after the rounds were over.
+    //
+    // `atEnd` is the single tick that crosses the finish line: it still runs,
+    // so the completion beep fires, but the per-segment announcements skip it
+    // rather than announcing the first exercise of a round that never happens.
+    const duration = timerDuration(cfg);
+    if (duration !== null && prev >= duration) return;
+    const atEnd = duration !== null && elapsed >= duration;
+
     if (cfg.type === "countdown") {
       const rem = cfg.totalSeconds - elapsed;
       if (doBeep && rem >= 1 && rem <= 3) { beep321(); tryVibrate(100); }
@@ -631,7 +661,7 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       if (coach.halfway && cfg.totalSeconds >= 240 && emomHalf % 60 !== 0 && prev < emomHalf && elapsed >= emomHalf) {
         speakText(`Halfway. ${speakDuration(cfg.totalSeconds - emomHalf)} to go`, voiceEnabled, audio);
       }
-      if (crossedBoundary(prev, elapsed, 60, 60)) {
+      if (!atEnd && crossedBoundary(prev, elapsed, 60, 60)) {
         if (doBeep) { beepMinute(); tryVibrate(200); }
         // Voice: announce round and exercise at minute change
         if (cfg.exercises) {
@@ -657,7 +687,7 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       const nextExName = cfg.exercises && cfg.exercises[nextStIdx] ? cfg.exercises[nextStIdx] : null;
       
       // Start of WORK period (crossing-safe across clock jumps)
-      if (crossedBoundary(prev, elapsed, cycleLen, cycleLen)) {
+      if (!atEnd && crossedBoundary(prev, elapsed, cycleLen, cycleLen)) {
         if (doBeep) { beepWork(); tryVibrate([100,50,100,50,100]); }
         const voiceMsg = exName ? `Round ${round} of ${cfg.rounds}. ${exName}` : `Round ${round} of ${cfg.rounds}`;
         speakText(voiceMsg, voiceEnabled, audio);
@@ -668,7 +698,7 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
         speakText(voiceMsg, voiceEnabled, audio);
       }
       // Start of REST period (crossing-safe across clock jumps)
-      if (crossedBoundary(prev, elapsed, cycleLen, cfg.workSeconds)) {
+      if (!atEnd && crossedBoundary(prev, elapsed, cycleLen, cfg.workSeconds)) {
         if (doBeep) { beepRest(); tryVibrate(200); }
         // Voice: announce what the next work period holds
         if (round === cfg.rounds && nextExName) {
@@ -681,7 +711,9 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       }
       const isWork = withinCycle < cfg.workSeconds;
       const secsLeft = isWork ? (cfg.workSeconds - withinCycle) : (cycleLen - withinCycle);
-      if (doBeep && secsLeft >= 1 && secsLeft <= 3) beep321();
+      if (doBeep && !atEnd && secsLeft >= 1 && secsLeft <= 3) beep321();
+      // Tabata had no completion cue at all — the last rest just rolled on
+      if (doBeep && atEnd) { beepFinish(); tryVibrate([200,100,200,100,400]); }
     }
     if (cfg.type === "fgb") {
       const stSec = cfg.stationSeconds;
@@ -691,17 +723,18 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       const stationIdx = Math.floor(withinRound / stSec);
       // Station entry (crossing-safe): fire when the station segment identity changes
       const stationKey = (e) => { const wr = e % roundLen; return Math.floor(e / roundLen) * 1000 + (wr < stSec * cfg.stations ? Math.floor(wr / stSec) : 999); };
-      if (stationKey(elapsed) !== stationKey(prev) && withinRound < stSec * cfg.stations && withinRound >= stSec) {
+      if (!atEnd && stationKey(elapsed) !== stationKey(prev) && withinRound < stSec * cfg.stations && withinRound >= stSec) {
         if (doBeep) { beepMinute(); tryVibrate(200); }
         // Voice: announce station exercise
         const exName = cfg.exercises && cfg.exercises[stationIdx] ? cfg.exercises[stationIdx] : `Station ${stationIdx + 1}`;
         speakText(`${exName}. Round ${roundIdx + 1}`, voiceEnabled, audio);
       }
-      if (crossedBoundary(prev, elapsed, roundLen, stSec * cfg.stations)) {
+      if (!atEnd && crossedBoundary(prev, elapsed, roundLen, stSec * cfg.stations)) {
         if (doBeep) { beepRest(); tryVibrate(300); }
         const firstEx = coach.nextPreview && cfg.exercises && cfg.exercises[0];
         speakText(firstEx ? `Rest. Next round: ${firstEx}` : `Rest`, voiceEnabled, audio);
       }
+      if (doBeep && atEnd) { beepFinish(); tryVibrate([200,100,200,100,400]); }
     }
     if (cfg.type === "deathby") {
       if (crossedBoundary(prev, elapsed, 60, 60)) { if (doBeep) { beepMinute(); tryVibrate(200); }
@@ -732,13 +765,13 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       // Segment identity — changes on every exercise change and on entering rest
       const segChanged = elapsed > 0 && circuitSegmentKey(cfg, elapsed) !== circuitSegmentKey(cfg, prev);
       // Start of rest period
-      if (cfg.restSeconds > 0 && isRest && !wasRest && segChanged) {
+      if (!atEnd && cfg.restSeconds > 0 && isRest && !wasRest && segChanged) {
         if (doBeep) { beepRest(); tryVibrate(200); }
         const preview = coach.nextPreview && nextAfterRest;
         speakText(preview ? `Rest. Next: ${preview}` : `Rest`, voiceEnabled, audio);
       }
       // Start of a new exercise (announces the CURRENT exercise once)
-      if (!isRest && segChanged) {
+      if (!atEnd && !isRest && segChanged) {
         if (doBeep) { beepWork(); tryVibrate([100,50,100]); }
         const isRoundStart = exIdx === 0;
         const msg = isRoundStart ? `Round ${roundIdx + 1}. ${exName || ''}` : (exName || '');
@@ -750,8 +783,13 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
         speakText(`Round 1. ${exName}`, voiceEnabled, audio);
       }
       // Last 3 seconds of each exercise period or rest period
-      if (doBeep && secsLeft >= 1 && secsLeft <= 3) beep321();
+      if (doBeep && !atEnd && secsLeft >= 1 && secsLeft <= 3) beep321();
     }
+    // One spoken sign-off for any bounded block. The guard above means this
+    // runs on exactly the tick that crosses the finish line, so it says the
+    // section is over once and then everything goes quiet — you can hear that
+    // you're done without taking the phone out.
+    if (atEnd) speakText("Section complete", voiceEnabled, audio);
   }, [elapsed, audio, cfg, voiceEnabled]);
   
   // ── EMOM with exercise tracking ──
@@ -1123,9 +1161,10 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   const fontSizeKey = settings.fontSize || "normal";
   const fs = FONT_SIZES[fontSizeKey] || FONT_SIZES.normal;
   
-  // 5-second countdown state
+  // Lead-in countdown state
   const [countdownLeft, setCountdownLeft] = useState(0);
   const countdownRef = useRef(null);
+  const leadInSeconds = Math.max(0, Number(settings.leadInSeconds ?? DEFAULT_SETTINGS.leadInSeconds));
   
   const overall = useTimer();
   const phase_timer = useTimer();
@@ -1134,10 +1173,14 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   const isDone = phase.type === "done";
   const activeTimer = timerOverrides[phaseIdx] || phase.timer;
   
-  // Check if a timer type needs the 5s lead-in countdown
+  // Which timers get the lead-in. Every clock that starts a timed effort the
+  // moment it runs needs one — "circuit" was missing, so core circuits dropped
+  // you straight into a 30s hold with no warning at all.
+  // Stopwatch phases are excluded on purpose: counting up costs you nothing
+  // while you read, so a lead-in would only be in the way.
   const needsCountdown = (timer) => {
     if (!timer) return false;
-    return ["countdown", "emom", "tabata", "fgb", "deathby"].includes(timer.type);
+    return ["countdown", "emom", "tabata", "fgb", "deathby", "circuit"].includes(timer.type);
   };
 
   // Prevent scroll
@@ -1237,23 +1280,34 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
     if (isDone) clearWorkoutRecovery();
   }, [isDone]);
 
-  // Run the 5-second countdown, then start the phase timer
+  // Run the lead-in countdown, then start the phase timer.
+  //
+  // Deadline-based rather than tick-counting, for the same reason the main
+  // clock is (see engine/timer.js): an interval that gets throttled would
+  // quietly stretch the lead-in past the time it claims to be counting.
   const startCountdown = useCallback((then) => {
-    setCountdownLeft(5);
-    let count = 5;
+    const seconds = leadInSeconds;
+    if (seconds <= 0) { if (then) then(); return; }
+    const endsAt = Date.now() + seconds * 1000;
+    setCountdownLeft(seconds);
     try { getAudioCtx(); } catch(e) {}
-    beep321(); tryVibrate(100);
+    tryVibrate(100);
+    let shown = seconds + 1;
     countdownRef.current = setInterval(() => {
-      count--;
-      setCountdownLeft(count);
-      if (count > 0) { beep321(); tryVibrate(100); }
-      if (count === 0) {
+      const left = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+      if (left === shown) return;
+      shown = left;
+      setCountdownLeft(left);
+      // Only the last 5 seconds tick audibly — a 15-second beep track is noise,
+      // and the point of the lead-in is quiet time to read the block.
+      if (left > 0 && left <= 5) { beep321(); tryVibrate(100); }
+      if (left === 0) {
         clearInterval(countdownRef.current);
         beepWork(); tryVibrate(300);
         if (then) then();
       }
-    }, 1000);
-  }, []);
+    }, 200);
+  }, [leadInSeconds]);
 
   const handleStart = () => {
     try { getAudioCtx(); } catch(e) {}
@@ -1413,7 +1467,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
               </div>
             ) : null;
           })()}
-          <div style={{fontSize: 12, color: "#666", marginBottom: 16}}>Timed sections start with a 5-second countdown</div>
+          <div style={{fontSize: 12, color: "#666", marginBottom: 16}}>Timed sections start with a {leadInSeconds}-second countdown</div>
           
           <button onClick={handleStart} style={{background: "linear-gradient(135deg, #3ddc84, #2bb86a)", border: "none", borderRadius: 14, padding: "16px 40px", color: "#fff", fontSize: 18, fontWeight: 800, cursor: "pointer"}}>
             GO {"\u25B6\uFE0F"}
@@ -1554,7 +1608,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
                 <div style={{fontFamily: DS.font.display, fontSize: 40, color: oText, letterSpacing: 1, lineHeight: 1}}>
                   {(() => {
                     const prevLogs = (logs || []).filter(l => l.workoutId === workout.id);
-                    const last = prevLogs.length > 0 ? prevLogs.sort((a,b) => new Date(b.date)-new Date(a.date))[0] : null;
+                    const last = prevLogs.length > 0 ? prevLogs.sort((a,b) => toLocalDate(b.date)-toLocalDate(a.date))[0] : null;
                     return last && last.rounds ? last.rounds : "0";
                   })()}
                 </div>
@@ -1564,7 +1618,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
                 <div style={{fontFamily: DS.font.display, fontSize: 40, color: oText, letterSpacing: 1, lineHeight: 1}}>
                   {(() => {
                     const prevLogs = (logs || []).filter(l => l.workoutId === workout.id);
-                    const last = prevLogs.length > 0 ? prevLogs.sort((a,b) => new Date(b.date)-new Date(a.date))[0] : null;
+                    const last = prevLogs.length > 0 ? prevLogs.sort((a,b) => toLocalDate(b.date)-toLocalDate(a.date))[0] : null;
                     return last && last.extraReps ? last.extraReps : "0";
                   })()}
                 </div>
@@ -1593,7 +1647,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
 
             {/* Previous best comparison */}
             {(() => {
-              const prevLogs = (logs || []).filter(l => l.workoutId === workout.id).sort((a,b) => new Date(b.date) - new Date(a.date));
+              const prevLogs = (logs || []).filter(l => l.workoutId === workout.id).sort((a,b) => toLocalDate(b.date) - toLocalDate(a.date));
               if (prevLogs.length === 0) return (
                 <div style={{fontSize: 13, color: oSub, marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 6}}>
                   <Icon name="award" size={16} color={DS.colors.orange} /> First time doing this workout!
@@ -1606,7 +1660,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
                 const diff = thisTime - lastTime;
                 return (
                   <div style={{marginBottom: 16, padding: "12px 16px", background: outdoorMode ? "#00000008" : DS.colors.surface, borderRadius: DS.radius.lg, border: `1px solid ${outdoorMode ? "#ddd" : DS.colors.border}`}}>
-                    <div style={{fontSize: 11, color: oSub, marginBottom: 4}}>vs last attempt ({new Date(lastLog.date).toLocaleDateString("en-GB", {day:"numeric",month:"short"})})</div>
+                    <div style={{fontSize: 11, color: oSub, marginBottom: 4}}>vs last attempt ({toLocalDate(lastLog.date).toLocaleDateString("en-GB", {day:"numeric",month:"short"})})</div>
                     <div style={{fontSize: 18, fontWeight: 800, color: diff < 0 ? DS.colors.green : diff > 60 ? "#ef4444" : oSub, fontFamily: DS.font.display, letterSpacing: 1}}>
                       {diff < 0 ? `${fmt(Math.abs(diff))} FASTER` : diff === 0 ? "SAME TIME!" : `${fmt(diff)} SLOWER`}
                     </div>
@@ -1822,7 +1876,7 @@ function LogWorkoutModal({ workout, onSave, onClose, existingLog, diffOverrides,
   // Auto-fill time: use elapsed from timer if available, otherwise existing log, otherwise workout duration
   const autoMins = elapsedSecs ? Math.floor(elapsedSecs / 60) : null;
   const autoSecs = elapsedSecs ? elapsedSecs % 60 : null;
-  const [date, setDate] = useState(existingLog?.date || new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(existingLog?.date || localDateKey());
   const [difficulty, setDifficulty] = useState(existingLog?.difficulty || currentRating);
   const [totalMins, setTotalMins] = useState(existingLog?.totalMins || autoMins || w.duration || "");
   const [totalSecs, setTotalSecs] = useState(existingLog?.totalSecs || autoSecs || 0);
@@ -1994,22 +2048,21 @@ function formatLogResult(log) {
 // ═══════════════════════════════════════════════════════════════
 function StatsView({ logs, onSelectWorkout }) {
   const s = useMemo(() => {
-    const MS = 86400000;
-    const dayKey = (dt) => { const d = new Date(dt); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+    const dayKey = localDateKey;
     const days = [...new Set(logs.map(l => dayKey(l.date)))].sort();
     // best-ever streak: longest run of consecutive days
-    let best = 0, run = 0, prevT = null;
+    let best = 0, run = 0, prevDay = null;
     for (const d of days) {
-      const t = new Date(d + "T12:00:00").getTime();
-      run = (prevT !== null && Math.round((t - prevT) / MS) === 1) ? run + 1 : 1;
+      run = (prevDay !== null && localDateKeyOffset(d, -1) === prevDay) ? run + 1 : 1;
       if (run > best) best = run;
-      prevT = t;
+      prevDay = d;
     }
     // current streak: consecutive days ending today or yesterday
     const set = new Set(days);
     let cur = 0;
-    const anchor = set.has(dayKey(Date.now())) ? Date.now() : (set.has(dayKey(Date.now() - MS)) ? Date.now() - MS : null);
-    if (anchor !== null) { let t = anchor; while (set.has(dayKey(t))) { cur++; t -= MS; } }
+    const today = dayKey();
+    let key = set.has(today) ? today : (set.has(localDateKeyOffset(today, -1)) ? localDateKeyOffset(today, -1) : null);
+    while (key !== null && set.has(key)) { cur++; key = localDateKeyOffset(key, -1); }
     // sessions per week, last 12 weeks (Monday-based)
     const now = new Date();
     const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7)); monday.setHours(0, 0, 0, 0);
@@ -2017,7 +2070,7 @@ function StatsView({ logs, onSelectWorkout }) {
     for (let i = 11; i >= 0; i--) {
       const start = new Date(monday); start.setDate(monday.getDate() - i * 7);
       const end = new Date(start); end.setDate(start.getDate() + 7);
-      weeks.push({ label: `${start.getDate()}/${start.getMonth() + 1}`, count: logs.filter(l => { const d = new Date(l.date); return d >= start && d < end; }).length, isThisWeek: i === 0 });
+      weeks.push({ label: `${start.getDate()}/${start.getMonth() + 1}`, count: logs.filter(l => { const d = toLocalDate(l.date); return d >= start && d < end; }).length, isThisWeek: i === 0 });
     }
     // per-workout: PBs (2+ attempts) and most-trained
     const byWorkout = {};
@@ -2038,10 +2091,10 @@ function StatsView({ logs, onSelectWorkout }) {
       .filter(([, g]) => g.length >= 2)
       .map(([id, g]) => ({ workoutId: Number(id), log: bestLog(g), count: g.length }))
       .filter(x => x.log)
-      .sort((a, b) => new Date(b.log.date) - new Date(a.log.date))
+      .sort((a, b) => toLocalDate(b.log.date) - toLocalDate(a.log.date))
       .slice(0, 8);
     const most = Object.entries(byWorkout)
-      .map(([id, g]) => ({ workoutId: Number(id), count: g.length, last: g.reduce((m, l) => Math.max(m, +new Date(l.date)), 0), best: bestLog(g) }))
+      .map(([id, g]) => ({ workoutId: Number(id), count: g.length, last: g.reduce((m, l) => Math.max(m, +toLocalDate(l.date)), 0), best: bestLog(g) }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
     const tally = (arr) => { const m = {}; for (const x of arr) if (x) m[x] = (m[x] || 0) + 1; return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 6); };
@@ -2110,8 +2163,8 @@ function StatsView({ logs, onSelectWorkout }) {
             const earned = b.type === "count" ? logs.length >= b.need : s.best >= b.need;
             let earnedDate = null;
             if (earned && b.type === "count") {
-              const nth = [...logs].sort((x, y) => new Date(x.date) - new Date(y.date))[b.need - 1];
-              if (nth) earnedDate = new Date(nth.date).toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
+              const nth = [...logs].sort((x, y) => toLocalDate(x.date) - toLocalDate(y.date))[b.need - 1];
+              if (nth) earnedDate = toLocalDate(nth.date).toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
             }
             return (
               <div key={b.label} style={{
@@ -2135,7 +2188,7 @@ function StatsView({ logs, onSelectWorkout }) {
           <button key={p.workoutId} onClick={() => { const w = findWorkout(p.workoutId); if (w) onSelectWorkout(w); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", borderBottom: "1px solid #1a1a2e", padding: "10px 0", cursor: "pointer" }}>
             <div style={{ textAlign: "left" }}>
               <div style={{ fontSize: 14, fontWeight: 800, color: "#ff8a3a" }}>{wName(p.workoutId)}</div>
-              <div style={{ fontSize: 11, color: "#666" }}>{p.count} attempts · set {new Date(p.log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</div>
+              <div style={{ fontSize: 11, color: "#666" }}>{p.count} attempts · set {toLocalDate(p.log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</div>
             </div>
             <div style={{ fontSize: 15, fontWeight: 800, color: "#3ddc84" }}>{"\u{1F3C6}"} {formatLogResult(p.log)}</div>
           </button>
@@ -2180,7 +2233,7 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
   });
 
   const sortedLogs = useMemo(() => {
-    let filtered = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
+    let filtered = [...logs].sort((a, b) => toLocalDate(b.date) - toLocalDate(a.date));
     if (historySearch) {
       const s = historySearch.toLowerCase();
       filtered = filtered.filter(l => {
@@ -2200,14 +2253,13 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
   const stats = useMemo(() => {
     const now = new Date();
     const thisMonth = logs.filter(l => {
-      const d = new Date(l.date);
+      const d = toLocalDate(l.date);
       return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
     });
-    const thisWeek = logs.filter(l => {
-      const d = new Date(l.date);
-      const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
-      return d >= weekAgo;
-    });
+    // Whole calendar days: log dates sit at local midnight, so a boundary
+    // carrying a time-of-day would drop a session logged 7 days ago.
+    const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7); weekAgo.setHours(0, 0, 0, 0);
+    const thisWeek = logs.filter(l => toLocalDate(l.date) >= weekAgo);
     const totalTime = logs.reduce((sum, l) => sum + (l.totalMins || 0), 0);
     return { total: logs.length, thisMonth: thisMonth.length, thisWeek: thisWeek.length, totalHours: Math.round(totalTime / 60) };
   }, [logs]);
@@ -2309,7 +2361,7 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
           </div>
           <div style={{display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3}}>
             {calendarData.map((cell, i) => {
-              const todayStr = new Date().toISOString().split("T")[0];
+              const todayStr = localDateKey();
               const isToday = cell?.date === todayStr;
               return (
               <div key={i} onClick={() => { if (cell?.logs?.length) { setSelectedDay(selectedDay === cell.date ? null : cell.date); setViewMode("list"); } }} style={{
@@ -2346,7 +2398,7 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
                   <button onClick={() => found && !found.synthetic && onSelectWorkout(found)} style={{background: "none", border: "none", padding: 0, cursor: found && !found.synthetic ? "pointer" : "default"}}>
                     <span style={{fontSize: 17, fontWeight: 800, color: found && !found.synthetic ? "#ff8a3a" : "#3ddc84"}}>{w.custom ? w.name : `#${w.id}`}</span>
                   </button>
-                  <span style={{fontSize: 12, color: "#666", marginLeft: 8}}>{new Date(log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
+                  <span style={{fontSize: 12, color: "#666", marginLeft: 8}}>{toLocalDate(log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
                 </div>
                 <div style={{display: "flex", gap: 4, alignItems: "center"}}>
                   <span style={{...sty.badge, background: DIFFICULTY_COLORS[rating] + "25", color: DIFFICULTY_COLORS[rating], borderColor: DIFFICULTY_COLORS[rating] + "50", fontSize: 11, padding: "3px 8px"}}>{rating}</span>
@@ -2386,7 +2438,7 @@ function HistoryScreen({ logs, diffOverrides, onSelectWorkout, onEditLog, onDele
 // ═══════════════════════════════════════════════════════════════
 function WorkoutLogHistory({ workoutId, logs, diffOverrides, onEditLog }) {
   const workoutLogs = useMemo(() =>
-    logs.filter(l => l.workoutId === workoutId).sort((a, b) => new Date(b.date) - new Date(a.date)),
+    logs.filter(l => l.workoutId === workoutId).sort((a, b) => toLocalDate(b.date) - toLocalDate(a.date)),
     [workoutId, logs]
   );
   
@@ -2401,7 +2453,7 @@ function WorkoutLogHistory({ workoutId, logs, diffOverrides, onEditLog }) {
     if (rf.type === "amrap") {
       let best = null;
       // Sort chronologically to find when PB was set
-      const chrono = [...workoutLogs].sort((a,b) => new Date(a.date) - new Date(b.date));
+      const chrono = [...workoutLogs].sort((a,b) => toLocalDate(a.date) - toLocalDate(b.date));
       for (const log of chrono) {
         if (log.rounds == null) continue;
         const score = (log.rounds || 0) * 1000 + (log.extraReps || 0);
@@ -2412,7 +2464,7 @@ function WorkoutLogHistory({ workoutId, logs, diffOverrides, onEditLog }) {
     // For TIME: lowest completion time
     if (rf.type === "fortime") {
       let best = null;
-      const chrono = [...workoutLogs].sort((a,b) => new Date(a.date) - new Date(b.date));
+      const chrono = [...workoutLogs].sort((a,b) => toLocalDate(a.date) - toLocalDate(b.date));
       for (const log of chrono) {
         if (log.completionMins == null) continue;
         const secs = (log.completionMins || 0) * 60 + (log.completionSecs || 0);
@@ -2454,7 +2506,7 @@ function WorkoutLogHistory({ workoutId, logs, diffOverrides, onEditLog }) {
             <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4}}>
               <div style={{display: "flex", alignItems: "center", gap: 6}}>
                 <span style={{fontSize: 13, color: "#ccc", fontWeight: 600}}>
-                  {new Date(log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                  {toLocalDate(log.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
                 </span>
                 {isPB && <span style={{fontSize: 10, fontWeight: 800, color: "#f59e0b", background: "#f59e0b20", borderRadius: 6, padding: "2px 6px"}}>{"\u{1F3C6}"} PB</span>}
               </div>
@@ -2483,7 +2535,7 @@ function setMeta(patch) { saveData("meta", { ...getMeta(), ...patch }); }
 // download fallback elsewhere. Returns true if the backup left the app.
 async function exportBackup() {
   const json = JSON.stringify(buildBackup(__APP_VERSION__), null, 2);
-  const filename = `parkwod-backup-${new Date().toISOString().split("T")[0]}.json`;
+  const filename = `parkwod-backup-${localDateKey()}.json`;
   try {
     const file = new File([json], filename, { type: "application/json" });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -2533,7 +2585,7 @@ async function shareResultCard(log, workout, isPB) {
   ctx.fillStyle = "#ff8a3a"; ctx.font = '64px "Bebas Neue", sans-serif';
   ctx.fillText("PARK WOD", 80, 160);
   ctx.fillStyle = "#777"; ctx.font = '32px "DM Sans", sans-serif';
-  ctx.fillText(new Date(log.date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }), 80, 215);
+  ctx.fillText(toLocalDate(log.date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }), 80, 215);
   const title = workout ? (workout.custom ? workout.name : `WOD #${workout.id}`) : `Workout ${log.workoutId}`;
   ctx.fillStyle = "#fff"; ctx.font = '120px "Bebas Neue", sans-serif';
   ctx.fillText(title.slice(0, 16), 80, 420);
@@ -2574,17 +2626,17 @@ async function exportHistoryCsv() {
   const logs = loadData("logs", []);
   const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
   const rows = [["Date", "Workout", "Focus", "Format", "Equipment", "Duration (min)", "Result", "Notes"]];
-  for (const l of [...logs].sort((a, b) => new Date(a.date) - new Date(b.date))) {
+  for (const l of [...logs].sort((a, b) => toLocalDate(a.date) - toLocalDate(b.date))) {
     const w = findWorkout(l.workoutId);
     rows.push([
-      new Date(l.date).toISOString().slice(0, 10),
+      localDateKey(l.date),
       w ? (w.custom ? w.name : `#${w.id}`) : l.workoutId,
       w ? w.focus : "", l.format || (w && w.format) || "", w ? w.equipment : "",
       l.totalMins || "", formatLogResult(l), l.notes || "",
     ]);
   }
   const csv = rows.map(r => r.map(esc).join(",")).join("\r\n");
-  const filename = `parkwod-history-${new Date().toISOString().slice(0, 10)}.csv`;
+  const filename = `parkwod-history-${localDateKey()}.csv`;
   try {
     const file = new File([csv], filename, { type: "text/csv" });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -2932,6 +2984,25 @@ function SettingsScreen({ settings, onUpdate }) {
             </button>
           );
         })}
+      </div>
+
+      {/* Lead-in countdown — the GET READY window before a timed block starts */}
+      <div style={{marginBottom: 24}}>
+        <div style={sty.sectionTitle}>Get Ready Countdown</div>
+        <div style={{fontSize: 11, color: "#666", marginBottom: 8}}>How long you get to read a section and get into position before its clock starts. Only the last 5 seconds beep.</div>
+        <div style={{display: "flex", gap: 8}}>
+          {LEAD_IN_CHOICES.map(n => {
+            const on = Number(settings.leadInSeconds ?? DEFAULT_SETTINGS.leadInSeconds) === n;
+            return (
+              <button key={n} onClick={() => onUpdate({ leadInSeconds: n })} style={{
+                flex: 1, padding: "14px 0", borderRadius: 12, cursor: "pointer",
+                background: on ? "#ff8a3a15" : "#111122",
+                border: on ? "1px solid #ff8a3a50" : "1px solid #333",
+                color: on ? "#ff8a3a" : "#fff", fontSize: 15, fontWeight: 800,
+              }}>{n}s</button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Weekly Plan */}
@@ -3604,7 +3675,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
     const monday = new Date();
     monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
     monday.setHours(0, 0, 0, 0);
-    const done = logs.filter(l => new Date(l.date) >= monday).length;
+    const done = logs.filter(l => toLocalDate(l.date) >= monday).length;
     const target = weeklyPlan.focuses.length;
     return { done, target, nextFocus: done < target ? weeklyPlan.focuses[done] : null };
   }, [weeklyPlan, logs]);
@@ -3618,23 +3689,23 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
   }), []);
 
   const recentLogs = useMemo(() => {
-    return [...logs].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 3);
+    return [...logs].sort((a, b) => toLocalDate(b.date) - toLocalDate(a.date)).slice(0, 3);
   }, [logs]);
 
-  // Calculate day streak
+  // Calculate day streak — consecutive local calendar days ending today (or
+  // yesterday, so the streak survives until you train again). Walking day keys
+  // rather than subtracting timestamps keeps this correct across DST and never
+  // compares "now" against a midnight boundary.
   const dayStreak = useMemo(() => {
     if (logs.length === 0) return 0;
-    const sorted = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
-    const dates = [...new Set(sorted.map(l => new Date(l.date).toDateString()))];
+    const days = new Set(logs.map(l => localDateKey(l.date)));
+    const today = localDateKey();
+    const yesterday = localDateKeyOffset(today, -1);
+    let key = days.has(today) ? today : (days.has(yesterday) ? yesterday : null);
+    if (key === null) return 0;
     let streak = 0;
-    const today = new Date();
-    for (let i = 0; i < dates.length; i++) {
-      const d = new Date(dates[i]);
-      const diff = Math.floor((today - d) / 86400000);
-      if (diff <= streak + 1) streak = diff + 1 >= streak + 1 ? streak + 1 : streak;
-      else break;
-    }
-    return Math.min(streak, dates.length);
+    while (days.has(key)) { streak++; key = localDateKeyOffset(key, -1); }
+    return streak;
   }, [logs]);
 
   // Total active minutes
@@ -3676,7 +3747,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
             <div style={{fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.7)", marginTop: 4, letterSpacing: 0.5}}>
               {(() => {
                 const focuses = [...new Set(RAW_DATA.map(w => w.focus))];
-                const recentFocuses = [...logs].sort((a,b) => new Date(b.date)-new Date(a.date)).slice(0,2).map(l => { const w = findWorkout(l.workoutId); return w ? w.focus : null; }).filter(Boolean);
+                const recentFocuses = [...logs].sort((a,b) => toLocalDate(b.date)-toLocalDate(a.date)).slice(0,2).map(l => { const w = findWorkout(l.workoutId); return w ? w.focus : null; }).filter(Boolean);
                 const next = focuses.find(f => !recentFocuses.includes(f)) || focuses[0];
                 return next ? next.toUpperCase() : "FULL BODY";
               })()}
@@ -3727,7 +3798,7 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
 
       {/* ── TODAY'S PICK — deterministic daily suggestion with shuffle ── */}
       {(() => {
-        const sortedLogs = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
+        const sortedLogs = [...logs].sort((a, b) => toLocalDate(b.date) - toLocalDate(a.date));
         const recentFocuses = sortedLogs.slice(0, 2).map(l => {
           const wk = findWorkout(l.workoutId);
           return wk ? wk.focus : null;
@@ -3856,12 +3927,19 @@ function HomeScreen({ onNavigate, onRandom, filtered, logs, onFilterEquipment, o
             if (!w) return null;
             const resultStr = formatLogResult(log);
             const timeAgo = (() => {
-              const mins = Math.floor((Date.now() - new Date(log.date).getTime()) / 60000);
-              if (mins < 60) return `${mins} MINS AGO`;
-              const hrs = Math.floor(mins / 60);
-              if (hrs < 24) return `${hrs}H AGO`;
-              const days = Math.floor(hrs / 24);
-              return `${days}D AGO`;
+              // createdAt is a real instant, so it gives an honest "2H AGO".
+              // log.date is only a calendar day: fall back to counting days,
+              // since minutes measured from its midnight would be fiction.
+              const stamp = log.createdAt ? new Date(log.createdAt).getTime() : NaN;
+              if (!Number.isNaN(stamp)) {
+                const mins = Math.max(0, Math.floor((Date.now() - stamp) / 60000));
+                if (mins < 60) return `${mins} MINS AGO`;
+                const hrs = Math.floor(mins / 60);
+                if (hrs < 24) return `${hrs}H AGO`;
+                return `${Math.floor(hrs / 24)}D AGO`;
+              }
+              const days = daysBetweenLocal(log.date, new Date());
+              return days <= 0 ? "TODAY" : days === 1 ? "YESTERDAY" : `${days}D AGO`;
             })();
             return (
               <div key={log.id} style={{display: "flex", alignItems: "center", gap: 14, padding: "14px 0", borderBottom: idx < recentLogs.length - 1 ? `1px solid ${DS.colors.border}` : "none"}}>
@@ -4209,8 +4287,8 @@ function LibraryScreen({ workouts, filters, setFilters, showFilters, setShowFilt
                       {(() => {
                         const wLogs = logs ? logs.filter(l => l.workoutId === w.id) : [];
                         if (wLogs.length === 0) return null;
-                        const lastLog = wLogs.sort((a,b) => new Date(b.date) - new Date(a.date))[0];
-                        const daysAgo = Math.floor((Date.now() - new Date(lastLog.date).getTime()) / 86400000);
+                        const lastLog = wLogs.sort((a,b) => toLocalDate(b.date) - toLocalDate(a.date))[0];
+                        const daysAgo = daysBetweenLocal(lastLog.date, new Date());
                         const daysLabel = daysAgo === 0 ? "today" : daysAgo === 1 ? "yesterday" : `${daysAgo}d ago`;
                         return (
                           <span style={{fontSize: 10, fontWeight: 700, color: DS.colors.green, background: DS.colors.green + "15", borderRadius: DS.radius.pill, padding: "2px 8px", display: "flex", alignItems: "center", gap: 3}}>

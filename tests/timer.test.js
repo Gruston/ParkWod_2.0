@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createTimerState, timerStart, timerPause, timerIsRunning,
-  computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey,
+  computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration,
 } from "../src/engine/timer.js";
 
 const T0 = 1_000_000_000_000; // arbitrary wall-clock origin
@@ -165,4 +165,45 @@ test("circuitSegmentKey: changes exactly once per exercise and per rest", () => 
   // 6 exercises + 3 rests in one round
   assert.equal(transitions.length, 9);
   assert.equal(new Set(transitions).size, 9);
+});
+
+// ── timerDuration ──
+// Reported September 2026: "when the core workouts finish the rounds the timer
+// continues". The position maths has no notion of an end — a finished circuit
+// wraps straight into a phantom extra round — so the cue layer needs to be
+// told where the programmed work stops.
+
+test("timerDuration: bounded clocks report their programmed length", () => {
+  assert.equal(timerDuration({ type: "countdown", totalSeconds: 1200 }), 1200);
+  assert.equal(timerDuration({ type: "emom", totalSeconds: 960, totalMinutes: 16 }), 960);
+  assert.equal(timerDuration({ type: "circuit", totalSeconds: 300 }), 300);
+  // 8 stations x 2 rounds x (40 + 20) = 16 minutes
+  assert.equal(timerDuration({ type: "tabata", workSeconds: 40, restSeconds: 20, rounds: 2, stations: 8 }), 960);
+  assert.equal(timerDuration({ type: "fgb", stationSeconds: 60, stations: 5, restSeconds: 60, rounds: 3 }), 1080);
+});
+
+test("timerDuration: open-ended clocks report null", () => {
+  assert.equal(timerDuration({ type: "stopwatch", label: "Rounds" }), null);
+  assert.equal(timerDuration({ type: "deathby" }), null);
+  assert.equal(timerDuration(null), null);
+  assert.equal(timerDuration(undefined), null);
+});
+
+test("timerDuration: a missing or zero length reads as open-ended, not as 0", () => {
+  // A config with no duration must not be treated as "already finished",
+  // which would silence every cue from the first tick.
+  assert.equal(timerDuration({ type: "countdown" }), null);
+  assert.equal(timerDuration({ type: "circuit", totalSeconds: 0 }), null);
+});
+
+test("REGRESSION: a finished circuit wraps into a phantom round the cues must not follow", () => {
+  // #139's core: 5 exercises x 30s x 2 rounds = 300s. The position maths keeps
+  // going past that, which is exactly why the duration has to gate the cues.
+  const cfg = { type: "circuit", exerciseSeconds: 30, restSeconds: 0, rounds: 2,
+    exercises: ["Plank", "Side Plank (L)", "Side Plank (R)", "Hollow Hold", "Flutter Kicks"],
+    totalSeconds: 300 };
+  assert.equal(timerDuration(cfg), 300);
+  assert.equal(circuitPosition(cfg, 299).roundIdx, 1, "last second of the final round");
+  assert.equal(circuitPosition(cfg, 300).roundIdx, 2, "position alone would start a round 3");
+  assert.equal(circuitPosition(cfg, 300).exIdx, 0);
 });

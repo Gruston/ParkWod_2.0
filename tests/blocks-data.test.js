@@ -167,3 +167,92 @@ test("no stored timer claims an implausible duration", () => {
     }
   }
 });
+
+// ── pinned interpretations (reported September 2026) ──
+
+test("#139: the core circuit times flutter kicks too", () => {
+  // Reported: "the flutter kicks are missed from the core workout timer".
+  const t = WORKOUT_BLOCKS[139].core[0].timer;
+  assert.equal(t.type, "circuit");
+  assert.deepEqual(t.exercises, ["Plank", "Side Plank (L)", "Side Plank (R)", "Hollow Hold", "Flutter Kicks"]);
+  assert.equal(t.rounds, 2);
+  assert.equal(t.totalSeconds, 2 * 5 * 30, "5 moves x 30s x 2 rounds");
+});
+
+test("#65: tempo press runs 10s per rep, not 2s per set", () => {
+  // 3s up + 3s hold + 2s down + 2s resting at the bottom = 10s a rep,
+  // seven reps to a set, five sets.
+  const t = WORKOUT_BLOCKS[65].workout[0].timer;
+  assert.equal(t.type, "circuit");
+  assert.equal(t.exerciseSeconds, 10);
+  assert.equal(t.exercises.length, 7);
+  assert.equal(t.rounds, 5);
+  assert.equal(t.totalSeconds, 350);
+});
+
+for (const id of [91, 92]) {
+  test(`#${id}: two blocks of eight, two rounds each, a real rest between`, () => {
+    const blocks = WORKOUT_BLOCKS[id].workout;
+    const [one, rest, two] = blocks;
+    for (const b of [one, two]) {
+      assert.equal(b.timer.type, "tabata");
+      assert.equal(b.timer.rounds, 2, "four rounds was too much work for the session");
+      assert.equal(b.timer.stations, 8);
+      assert.equal(b.timer.exercises.length, 8);
+      // 8 stations x 2 rounds x 60s = 16 minutes a block
+      assert.equal((b.timer.workSeconds + b.timer.restSeconds) * b.timer.rounds * b.timer.stations, 960);
+    }
+    assert.equal(rest.timer.type, "countdown");
+    assert.equal(rest.timer.totalSeconds, 60, "the 1 min rest is its own phase, not prose");
+    // the two eights must stay distinct — fusing them is the original bug
+    assert.equal(new Set([...one.timer.exercises, ...two.timer.exercises]).size, 16);
+  });
+}
+
+test("no timed block silently drops a move that the prose lists", () => {
+  // The #139 class of bug: the parser only recognised moves written as a
+  // duration ("30s Plank"), so a round of "30 Russian Twist, 20 Bicycle
+  // Crunch, 30s Plank" became a one-exercise circuit that timed the plank and
+  // called the round done. Count the moves the prose lists and require the
+  // timer to carry at least that many.
+  const REST = /^\d*\s*s(ec)?s?\s*rest\b|^rest\b|^\d+\s*min\s*rest\b/i;
+  const proseMoves = (content) => {
+    let t = content.replace(/\*\s*\d+\s*$/, "").trim();
+    t = t.replace(/^\s*\d+\s*(rounds?|times|sets?)\s*(of\s*)?[-:–]?\s*/i, "");
+    let n = 0;
+    for (const raw of t.split(/[,;]| then /)) {
+      const p = raw.trim().replace(/^[\s.*]+|[\s.*]+$/g, "");
+      if (!p || REST.test(p)) continue;
+      n += /\bea(ch)?\s+side\b/i.test(p) ? 2 : 1; // "ea side" is two stations
+    }
+    return n;
+  };
+  for (const w of RAW_DATA) {
+    for (const b of WORKOUT_BLOCKS[w.id].core || []) {
+      const t = b.timer;
+      if (t.type !== "circuit" || t.restEvery) continue;
+      if (b.content.includes("\n")) continue; // multi-line prose needs its own reading
+      assert.ok(t.exercises.length >= proseMoves(b.content),
+        `#${w.id} core times ${t.exercises.length} of ${proseMoves(b.content)} moves: ${b.content}`);
+    }
+  }
+});
+
+test("every stored timer's programmed length agrees with its own parameters", () => {
+  for (const w of RAW_DATA) {
+    for (const b of [...WORKOUT_BLOCKS[w.id].workout, ...(WORKOUT_BLOCKS[w.id].core || [])]) {
+      const t = b.timer;
+      if (t.type === "circuit") {
+        const groups = t.restEvery ? Math.ceil(t.exercises.length / t.restEvery) : 1;
+        const expected = t.rounds * (t.exercises.length * t.exerciseSeconds + groups * (t.restSeconds || 0));
+        assert.equal(t.totalSeconds, expected, `#${w.id} circuit totalSeconds disagrees with its rounds/exercises`);
+      }
+      if (t.type === "emom") {
+        assert.equal(t.totalSeconds, t.totalMinutes * 60, `#${w.id} emom minutes and seconds disagree`);
+      }
+      if (t.type === "tabata" && t.exercises) {
+        assert.equal(t.stations, t.exercises.length, `#${w.id} tabata stations do not match its exercise list`);
+      }
+    }
+  }
+});

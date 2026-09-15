@@ -53,6 +53,32 @@ export function crossedBoundary(prev, elapsed, step, offset = 0) {
   return lastBoundary > prev;
 }
 
+// ── Programmed duration ──
+// How long a timer config is MEANT to run, or null for clocks that have no
+// natural end (stopwatch counts up; death-by runs until you fail).
+//
+// The clock itself never stops — overtime on an AMRAP is useful information,
+// and a finished circuit still wants its elapsed time recorded. What this
+// enables is switching the CUES off at the end: without it a circuit's
+// position maths wraps straight into a phantom extra round and keeps beeping
+// and calling exercises while the display already reads COMPLETE.
+export function timerDuration(cfg) {
+  if (!cfg) return null;
+  const positive = (n) => (typeof n === "number" && n > 0 ? n : null);
+  switch (cfg.type) {
+    case "countdown":
+    case "emom":
+    case "circuit":
+      return positive(cfg.totalSeconds);
+    case "tabata":
+      return positive((cfg.workSeconds + cfg.restSeconds) * cfg.rounds * (cfg.stations || 1));
+    case "fgb":
+      return positive((cfg.stationSeconds * cfg.stations + cfg.restSeconds) * cfg.rounds);
+    default:
+      return null; // stopwatch, deathby — open-ended by design
+  }
+}
+
 // ── Circuit position ──
 // A circuit runs a list of equal-length timed exercises for N rounds. By
 // default the rest period comes once per round, after the whole list. An
