@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createTimerState, timerStart, timerPause, timerIsRunning,
-  computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration,
+  computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration, tabataPosition,
 } from "../src/engine/timer.js";
 
 const T0 = 1_000_000_000_000; // arbitrary wall-clock origin
@@ -180,6 +180,47 @@ test("timerDuration: bounded clocks report their programmed length", () => {
   // 8 stations x 2 rounds x (40 + 20) = 16 minutes
   assert.equal(timerDuration({ type: "tabata", workSeconds: 40, restSeconds: 20, rounds: 2, stations: 8 }), 960);
   assert.equal(timerDuration({ type: "fgb", stationSeconds: 60, stations: 5, restSeconds: 60, rounds: 3 }), 1080);
+});
+
+// ── tabata ordering ──
+
+test("tabataPosition: block order works every round of a station before moving on", () => {
+  const cfg = { workSeconds: 40, restSeconds: 20, rounds: 4, stations: 2 };
+  const at = (cycle) => tabataPosition(cfg, cycle * 60);
+  assert.deepEqual([0, 1, 2, 3].map(c => at(c).stationIdx), [0, 0, 0, 0]);
+  assert.deepEqual([0, 1, 2, 3].map(c => at(c).round), [1, 2, 3, 4]);
+  assert.equal(at(4).stationIdx, 1);
+  assert.equal(at(4).round, 1);
+  assert.equal(at(3).nextStationIdx, 1);   // last round of station 0 -> next is station 1
+  assert.equal(at(1).nextStationIdx, 0);   // mid-station: same station again
+});
+
+test("tabataPosition: rotate goes through every exercise, then back to the first", () => {
+  // #206 shape: 8 exercises x 4 rounds, 40s on / 20s off
+  const cfg = { workSeconds: 40, restSeconds: 20, rounds: 4, stations: 8, rotate: true };
+  const at = (cycle) => tabataPosition(cfg, cycle * 60);
+  assert.deepEqual([0, 1, 2, 7].map(c => at(c).stationIdx), [0, 1, 2, 7]);
+  assert.equal(at(8).stationIdx, 0);        // back to exercise 1 ...
+  assert.equal(at(8).round, 2);             // ... for round 2
+  assert.equal(at(7).round, 1);
+  assert.equal(at(31).stationIdx, 7);       // last cycle
+  assert.equal(at(31).round, 4);
+  assert.equal(at(7).nextStationIdx, 0);    // wraps into the next round
+  assert.equal(at(31).nextStationIdx, null); // nothing after the final cycle
+  // no exercise is ever worked twice in a row
+  for (let c = 0; c < 31; c++) assert.notEqual(at(c).stationIdx, at(c + 1).stationIdx);
+});
+
+test("tabataPosition: work/rest phase and finish line", () => {
+  const cfg = { type: "tabata", workSeconds: 40, restSeconds: 20, rounds: 2, stations: 3, rotate: true };
+  assert.deepEqual(
+    (({ isWork, secsLeft }) => ({ isWork, secsLeft }))(tabataPosition(cfg, 100)),
+    { isWork: false, secsLeft: 20 },   // 40s into cycle 2 of 60s: resting, 20s to go
+  );
+  assert.equal(tabataPosition(cfg, 70).secsLeft, 30);  // 10s into work, 30s left
+  assert.equal(tabataPosition(cfg, 359).done, false);
+  assert.equal(tabataPosition(cfg, 360).done, true);
+  assert.equal(timerDuration(cfg), 360);
 });
 
 test("timerDuration: open-ended clocks report null", () => {

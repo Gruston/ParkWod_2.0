@@ -4,7 +4,7 @@ import { CATEGORY_PATTERNS, EXERCISE_INFO } from "./data/exercises.js";
 import { RAW_DATA, DIFFICULTY_COLORS, EQUIPMENT_ICONS, ALL_EQUIPMENT, ALL_RATINGS, ALL_FORMATS, ALL_FOCUSES, ALL_MOVEMENTS, ALL_WORKOUT_MOVEMENTS } from "./data/workouts.js";
 import { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech, speakDuration } from "./engine/voice.js";
 import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
-import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration } from "./engine/timer.js";
+import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration, tabataPosition } from "./engine/timer.js";
 import { toLocalDate, localDateKey, localDateKeyOffset, daysBetweenLocal } from "./engine/dates.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 import { WORKOUT_BLOCKS } from "./data/blocks.js";
@@ -677,19 +677,17 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       if (doBeep && prev < cfg.totalSeconds && elapsed >= cfg.totalSeconds) { beepFinish(); tryVibrate([200,100,200,100,400]); }
     }
     if (cfg.type === "tabata") {
-      const cycleLen = cfg.workSeconds + cfg.restSeconds;
-      const withinCycle = elapsed % cycleLen;
-      const currentCycle = Math.floor(elapsed / cycleLen);
-      const stationIdx = Math.floor(currentCycle / cfg.rounds);
-      const round = (currentCycle % cfg.rounds) + 1;
+      const { cycleLen, withinCycle, stationIdx, round, nextStationIdx, isWork, secsLeft } = tabataPosition(cfg, elapsed);
       const exName = cfg.exercises && cfg.exercises[stationIdx] ? cfg.exercises[stationIdx] : null;
-      const nextStIdx = stationIdx + (round === cfg.rounds ? 1 : 0);
-      const nextExName = cfg.exercises && cfg.exercises[nextStIdx] ? cfg.exercises[nextStIdx] : null;
-      
+      // Only a DIFFERENT exercise next counts as "next"; same station again is just another round
+      const nextExName = nextStationIdx !== null && nextStationIdx !== stationIdx && cfg.exercises && cfg.exercises[nextStationIdx] ? cfg.exercises[nextStationIdx] : null;
+
       // Start of WORK period (crossing-safe across clock jumps)
       if (!atEnd && crossedBoundary(prev, elapsed, cycleLen, cycleLen)) {
         if (doBeep) { beepWork(); tryVibrate([100,50,100,50,100]); }
-        const voiceMsg = exName ? `Round ${round} of ${cfg.rounds}. ${exName}` : `Round ${round} of ${cfg.rounds}`;
+        // Rotating: the round only ticks over when we come back to the first exercise
+        const voiceMsg = exName && cfg.rotate && stationIdx > 0 ? exName
+          : exName ? `Round ${round} of ${cfg.rounds}. ${exName}` : `Round ${round} of ${cfg.rounds}`;
         speakText(voiceMsg, voiceEnabled, audio);
       }
       // First cycle work start (elapsed 0 handled separately for voice)
@@ -701,16 +699,14 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       if (!atEnd && crossedBoundary(prev, elapsed, cycleLen, cfg.workSeconds)) {
         if (doBeep) { beepRest(); tryVibrate(200); }
         // Voice: announce what the next work period holds
-        if (round === cfg.rounds && nextExName) {
+        if (nextExName) {
           speakText(`Rest. Next exercise: ${nextExName}`, voiceEnabled, audio);
         } else if (coach.nextPreview && exName) {
           speakText(`Rest. Next: ${exName}`, voiceEnabled, audio); // same station, another round
-        } else if (nextExName || exName) {
+        } else if (exName) {
           speakText(`Rest`, voiceEnabled, audio);
         }
       }
-      const isWork = withinCycle < cfg.workSeconds;
-      const secsLeft = isWork ? (cfg.workSeconds - withinCycle) : (cycleLen - withinCycle);
       if (doBeep && !atEnd && secsLeft >= 1 && secsLeft <= 3) beep321();
       // Tabata had no completion cue at all — the last rest just rolled on
       if (doBeep && atEnd) { beepFinish(); tryVibrate([200,100,200,100,400]); }
@@ -830,18 +826,9 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
   
   // ── TABATA with enhanced exercise/round tracking ──
   if (cfg.type === "tabata") {
-    const cycleLen = cfg.workSeconds + cfg.restSeconds;
-    const totalCycles = cfg.rounds * cfg.stations;
-    const currentCycle = Math.floor(elapsed / cycleLen);
-    const withinCycle = elapsed % cycleLen;
-    const isWork = withinCycle < cfg.workSeconds;
-    const secsLeft = isWork ? (cfg.workSeconds - withinCycle) : (cycleLen - withinCycle);
-    const stationIdx = Math.floor(currentCycle / cfg.rounds);
-    const round = (currentCycle % cfg.rounds) + 1;
-    const done = currentCycle >= totalCycles;
+    const { isWork, secsLeft, stationIdx, round, done, nextStationIdx } = tabataPosition(cfg, elapsed);
     const exName = cfg.exercises && cfg.exercises[stationIdx] ? cfg.exercises[stationIdx] : null;
-    const nextStIdx = stationIdx + 1;
-    const nextExName = cfg.exercises && cfg.exercises[nextStIdx] ? cfg.exercises[nextStIdx] : null;
+    const nextExName = nextStationIdx !== null && nextStationIdx !== stationIdx && cfg.exercises && cfg.exercises[nextStationIdx] ? cfg.exercises[nextStationIdx] : null;
     const workCol = outdoor ? "#c2410c" : "#ff8a3a";
     const restCol = outdoor ? "#15803d" : "#3ddc84";
     const activeCol = isWork ? workCol : restCol;
@@ -865,7 +852,7 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
             {/* During REST — show next exercise prominently */}
             {!isWork && (
               <div style={{marginTop: 4, marginBottom: 4}}>
-                {round === cfg.rounds && nextExName ? (
+                {nextExName ? (
                   <div style={{fontSize: Math.max(22, fs.exercise), fontWeight: 800, color: oText, padding: "8px 20px", background: outdoor ? restCol + "25" : restCol + "18", borderRadius: 12, display: "inline-block"}}>
                     Next: {nextExName}
                   </div>
@@ -1077,8 +1064,25 @@ function TimerSettingsModal({ config, onSave, onClose }) {
         {cfg.type === "tabata" && <>
           <div style={{marginBottom: 12}}><label style={ts.setLabel}>Work (seconds)</label><input type="number" value={cfg.workSeconds} onChange={e => setCfg({...cfg, workSeconds: parseInt(e.target.value)||20})} style={ts.setInput} /></div>
           <div style={{marginBottom: 12}}><label style={ts.setLabel}>Rest (seconds)</label><input type="number" value={cfg.restSeconds} onChange={e => setCfg({...cfg, restSeconds: parseInt(e.target.value)||10})} style={ts.setInput} /></div>
-          <div style={{marginBottom: 12}}><label style={ts.setLabel}>Rounds per station</label><input type="number" value={cfg.rounds} onChange={e => setCfg({...cfg, rounds: parseInt(e.target.value)||8})} style={ts.setInput} /></div>
+          <div style={{marginBottom: 12}}><label style={ts.setLabel}>{cfg.rotate ? "Rounds (through all exercises)" : "Rounds per station"}</label><input type="number" value={cfg.rounds} onChange={e => setCfg({...cfg, rounds: parseInt(e.target.value)||8})} style={ts.setInput} /></div>
           <div style={{marginBottom: 12}}><label style={ts.setLabel}>Stations</label><input type="number" value={cfg.stations} onChange={e => setCfg({...cfg, stations: parseInt(e.target.value)||4})} style={ts.setInput} /></div>
+          {cfg.stations > 1 && cfg.rounds > 1 && (
+            <div style={{marginBottom: 12}}>
+              <label style={ts.setLabel}>Order</label>
+              {[[true, "Rotate through exercises", "Easier — one round of each, then back to the first"],
+                [false, "One exercise at a time", "Harder — all rounds of an exercise before the next"]].map(([rot, title, sub]) => {
+                const on = !!cfg.rotate === rot;
+                return (
+                  <button key={title} onClick={() => setCfg({...cfg, rotate: rot})}
+                    style={{display: "block", width: "100%", textAlign: "left", marginTop: 6, padding: "8px 12px", borderRadius: 8, cursor: "pointer",
+                      background: on ? "#ff8a3a22" : "#1a1a2e", border: `1px solid ${on ? "#ff8a3a" : "#333"}`, color: on ? "#ff8a3a" : "#999"}}>
+                    <div style={{fontSize: 13, fontWeight: 700}}>{title}</div>
+                    <div style={{fontSize: 11, color: "#777"}}>{sub}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </>}
         {cfg.type === "fgb" && <>
           <div style={{marginBottom: 12}}><label style={ts.setLabel}>Rounds</label><input type="number" value={cfg.rounds} onChange={e => setCfg({...cfg, rounds: parseInt(e.target.value)||3})} style={ts.setInput} /></div>
@@ -1438,7 +1442,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
                   <div>
                     <div style={{fontSize: 11, color: p.color, fontWeight: 700, letterSpacing: 1}}>{p.title}</div>
                     <div style={{fontSize: 13, color: "#ccc"}}>{timer.label}{overridden ? " (edited)" : ""}</div>
-                    {timer.type === "tabata" && <div style={{fontSize: 11, color: "#888"}}>{timer.workSeconds}s/{timer.restSeconds}s {"\u00D7"} {timer.rounds}r {"\u00D7"} {timer.stations} exercises</div>}
+                    {timer.type === "tabata" && <div style={{fontSize: 11, color: "#888"}}>{timer.workSeconds}s/{timer.restSeconds}s {"\u00D7"} {timer.rounds}r {"\u00D7"} {timer.stations} exercises{timer.stations > 1 && timer.rounds > 1 ? (timer.rotate ? " \u00B7 rotating" : " \u00B7 one exercise at a time") : ""}</div>}
                     {timer.type === "tabata" && timer.exercises && <div style={{fontSize: 11, color: "#666"}}>{timer.exercises.join(", ")}</div>}
                     {timer.type === "fgb" && timer.exercises && <div style={{fontSize: 11, color: "#666"}}>{timer.exercises.length} stations: {timer.exercises.join(", ")}</div>}
                   </div>

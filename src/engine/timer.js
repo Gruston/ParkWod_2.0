@@ -79,6 +79,37 @@ export function timerDuration(cfg) {
   }
 }
 
+// ── Tabata position ──
+// A tabata is `rounds × stations` work/rest cycles. Two orderings exist:
+//   blocks (default)  — every round of station 1, then station 2, … ("8 rounds
+//                       per exercise", "4 rounds Plank, 4 rounds Situps").
+//   rotate            — one cycle of each station in turn, then back to the
+//                       first for the next round ("4 Rounds (40s on/20s off)"
+//                       over a list of exercises). Four straight minutes of
+//                       40s push-ups is not a workout, it's a failure.
+// `nextStationIdx` is the station the following cycle works (null once the
+// last cycle is under way), so displays and voice can ask "who's next?"
+// without knowing which ordering is in play.
+export function tabataPosition(cfg, elapsed) {
+  const cycleLen = cfg.workSeconds + cfg.restSeconds;
+  const rounds = cfg.rounds;
+  const stations = cfg.stations || 1;
+  const totalCycles = rounds * stations;
+  const cycle = Math.floor(elapsed / cycleLen);
+  const withinCycle = elapsed % cycleLen;
+  const stationAt = (c) => (cfg.rotate ? c % stations : Math.floor(c / rounds));
+  const roundAt = (c) => (cfg.rotate ? Math.floor(c / stations) : c % rounds) + 1;
+  const isWork = withinCycle < cfg.workSeconds;
+  return {
+    cycleLen, totalCycles, cycle, withinCycle, isWork,
+    secsLeft: isWork ? cfg.workSeconds - withinCycle : cycleLen - withinCycle,
+    done: cycle >= totalCycles,
+    stationIdx: stationAt(cycle),
+    round: roundAt(cycle),
+    nextStationIdx: cycle + 1 < totalCycles ? stationAt(cycle + 1) : null,
+  };
+}
+
 // ── Circuit position ──
 // A circuit runs a list of equal-length timed exercises for N rounds. By
 // default the rest period comes once per round, after the whole list. An

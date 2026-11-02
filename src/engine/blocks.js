@@ -123,7 +123,8 @@ function detectBlockTimer(text) {
       
       // "Tabata (20/10) - 8 rounds V-Up, 8 Rounds Situp"
       if (roundExAll.length >= 1 && /TABATA|ON.*OFF/i.test(up)) {
-        roundExAll.forEach(m => result.push(m[2].trim().replace(/^[-\u2013]\s*/, '')));
+        // "4 Rounds (40s on/20s off)" is the interval spec, not an exercise
+        roundExAll.forEach(m => { if (!/^\(/.test(m[2].trim())) result.push(m[2].trim().replace(/^[-\u2013]\s*/, '')); });
         continue;
       }
       
@@ -265,7 +266,15 @@ function detectBlockTimer(text) {
     const rounds = roundsM ? (WORD_NUMS[roundsM[1].toLowerCase()] ?? parseInt(roundsM[1])) : 8;
     const exercises = parseExercises(text);
     const stations = exercises ? exercises.length : 4;
-    return { type: "tabata", workSeconds: work, restSeconds: rest, rounds, stations, exercises, label: `Tabata ${work}s/${rest}s` };
+    // "N rounds" over a list of exercises means go round the list N times. The
+    // exercise-by-exercise ordering is only right when the text says so: "N
+    // rounds each / per exercise / per station", or a round count per exercise
+    // ("4 rounds Plank, 4 rounds Situps"). No stated round count (the default 8
+    // above is a guess) keeps the original ordering too.
+    const perExercise = /\bROUNDS?\s*[-:]?\s*(?:EACH|PER\s+(?:EXERCISE|STATION))\b/i.test(upper) ||
+      (text.match(/\d+[ \t]*ROUNDS?[ \t]+[A-Z]/gi) || []).length >= 2;
+    const rotate = !!roundsM && rounds > 1 && !perExercise && !!exercises && stations > 1;
+    return { type: "tabata", workSeconds: work, restSeconds: rest, rounds, stations, exercises, ...(rotate ? { rotate: true } : {}), label: `Tabata ${work}s/${rest}s` };
   }
   
   // FIGHT GONE BAD

@@ -94,6 +94,30 @@ test("rep-based 'ea side' items are not split (only timed ones are)", () => {
   assert.deepEqual(t.exercises, ["Plank"]);
 });
 
+// ── tabata ordering: rotate through the list vs. exercise by exercise ──
+
+test("'N rounds' over an exercise list rotates through it", () => {
+  const t = detectBlockTimer("4 Rounds (40s on/20s off)\nBear Complex, Step-ups, DB Rows, Push-ups");
+  assert.equal(t.type, "tabata");
+  assert.equal(t.rotate, true);
+  assert.equal(t.stations, 4);
+  assert.equal(detectBlockTimer("Rotating Tabata (40/20) - 4 rounds - Situps, Plank, Pushup to failure").rotate, true);
+});
+
+test("'rounds each / per exercise / per station' and per-exercise round counts stay in blocks", () => {
+  for (const text of [
+    "20/10 Tabata - 8 rounds per exercise.\nDB Thrusters, DB Lunges, V-Ups",
+    "40/20 Tabata - Block 1 - 8 Exercises - 2 rounds each\nJump Squats, High knees, Burpees",
+    "Bodyweight Tabata 40/20 - 4 rounds each\n1) Burpees, Box Jumps, Push-up, Squats",
+    "Tabata (40/20) - 4 rounds Flutter kicks, 4 rounds Mountain Climbers",
+    "Tabata (20/10) - 8 rounds V-Up, 8 Rounds Situp",
+  ]) {
+    const t = detectBlockTimer(text);
+    assert.equal(t.type, "tabata", text);
+    assert.equal(t.rotate, undefined, text);
+  }
+});
+
 // ── "40s/20s" with unit letters ──
 
 test("interval written with unit letters is still a tabata", () => {

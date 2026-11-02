@@ -106,6 +106,22 @@ test("#80 override: tabata has 5 stations matching its 5 listed exercises", () =
   assert.equal(tab.exercises.length, 5);
 });
 
+test("#206: 8 exercises rotate for 4 rounds, not 4 minutes of each", () => {
+  const t = WORKOUT_BLOCKS[206].workout[0].timer;
+  assert.equal(t.type, "tabata");
+  assert.equal(t.rotate, true);
+  assert.equal(t.stations, 8);
+  assert.equal(t.rounds, 4);
+});
+
+test("tabatas declared per exercise stay in blocks (#78, #90, #91, #126)", () => {
+  for (const id of [78, 90, 91, 126]) {
+    const tabatas = Object.values(WORKOUT_BLOCKS[id]).flat().map(b => b.timer).filter(t => t.type === "tabata");
+    assert.ok(tabatas.length > 0, `#${id} has no tabata`);
+    for (const t of tabatas) assert.equal(t.rotate, undefined, `#${id} should run exercise by exercise`);
+  }
+});
+
 test("#97 override: 5 rounds of 5 stations = 25-minute EMOM", () => {
   const t = WORKOUT_BLOCKS[97].workout[0].timer;
   assert.equal(t.totalMinutes, 25);

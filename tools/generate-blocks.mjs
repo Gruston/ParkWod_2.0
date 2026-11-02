@@ -70,11 +70,14 @@ const coreCircuit = (exercises, rounds, { exerciseSeconds = 30, restSeconds = 0 
   label: `Core Circuit — ${rounds} Rounds`,
 });
 
-// Classic station-major tabata: every exercise is worked for `rounds` cycles
-// before the list moves on.
-const tabata = (exercises, rounds, workSeconds = 40, restSeconds = 20) => ({
+// Station-major tabata by default: every exercise is worked for `rounds`
+// cycles before the list moves on ("8 rounds per exercise", "2 rounds each").
+// Pass { rotate: true } for "N rounds" of a list, which means one cycle of each
+// exercise in turn and then back to the first — a body can't hold 4 straight
+// minutes of 40s push-ups, so these must NOT run exercise-by-exercise.
+const tabata = (exercises, rounds, workSeconds = 40, restSeconds = 20, { rotate = false } = {}) => ({
   type: "tabata", workSeconds, restSeconds, rounds, stations: exercises.length,
-  exercises, label: `Tabata ${workSeconds}s/${restSeconds}s`,
+  exercises, ...(rotate ? { rotate: true } : {}), label: `Tabata ${workSeconds}s/${restSeconds}s`,
 });
 
 const countdown = (seconds, label) => ({ type: "countdown", totalSeconds: secs(seconds), label });
@@ -90,7 +93,7 @@ const CORRECTIONS = {
   80: { timers: {
     0: { type: "emom", totalSeconds: 720, totalMinutes: 12, label: "EMOM 12 Min",
       exercises: ["12 push-up", "12 KB Squat"] },
-    1: { type: "tabata", workSeconds: 40, restSeconds: 20, rounds: 3, stations: 5, label: "Tabata 40s/20s",
+    1: { type: "tabata", workSeconds: 40, restSeconds: 20, rounds: 3, stations: 5, rotate: true, label: "Tabata 40s/20s",
       exercises: ["KB Swings", "KB High-pull", "KB lunges", "KB Rows", "Burpees"] },
   } },
   97: { timers: { 0: { type: "emom", totalSeconds: 1500, totalMinutes: 25, label: "EMOM 25 Min (5 rounds × 5)",
@@ -145,7 +148,7 @@ const CORRECTIONS = {
          exercises: ["10 Weighted Squat, 20 Hammer Curls, 12 Shoulder Press"],
          totalSeconds: secs(360), label: "3 Rounds × 2 Min" } } },
   // "- 1 min rest" makes the parser skip the whole line, so the list is lost
-  66:  { splits: [1, 2], timers: { 2: { type: "tabata", workSeconds: 40, restSeconds: 20, rounds: 3, stations: 3,
+  66:  { splits: [1, 2], timers: { 2: { type: "tabata", workSeconds: 40, restSeconds: 20, rounds: 3, stations: 3, rotate: true,
          label: "Tabata 40s/20s", exercises: ["Thrusters", "Skull Crushers", "DB Rows"] } } },
   67:  { splits: [1] },
   69:  { splits: [1] },
@@ -209,27 +212,30 @@ const CORRECTIONS = {
   // ── timed blocks whose exercise list the parser mangled ──
   // Each of these fed the timer and the voice a fragment of the format header
   // instead of the exercises, so the block announced nonsense or nothing.
-  52:  { coreTimers: { 0: tabata(["Plank", "Crunch", "Hollowhold"], 2) } },
+  52:  { coreTimers: { 0: tabata(["Plank", "Crunch", "Hollowhold"], 2, 40, 20, { rotate: true }) } },
   // "4 min at 20:10" is 8 cycles, so: 8 rounds of situps, then 8 of leg raises
   70:  { coreTimers: { 0: tabata(["Situps", "Leg Raises"], 8, 20, 10) } },
   73:  { timers: { 0: { type: "emom", totalSeconds: secs(600), totalMinutes: 10,
          exercises: ["10 Heavy SQ"], label: "EMOM 10 Min" } } },
   142: { timers: { 0: tabata(["DB Curls", "DB Push Press", "Burpees", "Step-ups w DB",
-         "Mountain Climbers", "DB SQ", "Dips", "Skipping"], 3) },
+         "Mountain Climbers", "DB SQ", "Dips", "Skipping"], 3, 40, 20, { rotate: true }) },
          coreTimers: { 0: coreCircuit(["Plank", "Rev Crunch", "Ankle Touches"], 3) } },
   // 9 rounds of a 3-minute cycle is 27 minutes, not the 36 the parser counted
   146: { timers: { 0: { type: "emom", totalSeconds: secs(1620), totalMinutes: 27,
          exercises: ["5 DB Thrusters + 30 Skips", "8 DB Renegade Rows + 4 Burpees", "10 DB SQ + 5 Box Jumps"],
          label: "EMOM 27 Min" } } },
   182: { timers: { 0: tabata(["DB Lateral Raise", "Step-ups w DB", "DB Renegade Row", "Jump Lunges",
-         "DB Curls", "Mountain Climbers", "DB SQ", "Burpees"], 4) },
+         "DB Curls", "Mountain Climbers", "DB SQ", "Burpees"], 4, 40, 20, { rotate: true }) },
          coreTimers: { 0: coreCircuit(["Plank", "Bicycle Crunch", "Leg Raises"], 3) } },
   206: { timers: { 0: tabata(["DB Bear Complex", "Step-ups", "DB Rows", "Broad Jumps",
-         "DB Curls", "Mountain Climbers", "Push-ups", "Skipping"], 4) },
+         "DB Curls", "Mountain Climbers", "Push-ups", "Skipping"], 4, 40, 20, { rotate: true }) },
          coreTimers: { 0: coreCircuit(["Plank", "Rev Crunch", "Ankle Touches"], 3) } },
 
   // ── a rounds circuit built around a lap run: nothing here fits a 30s clock ──
   99:  { timers: { 0: stopwatch("Rounds") } },
+  // "1 min bet rounds" was read as a 40s exercise; the real list is the five numbered moves
+  96:  { timers: { 0: tabata(["Stepup w DB", "Arnold Curl to Press", "Skipping", "Bar Rows", "Shoulder Tap Push Up"],
+         4, 40, 20, { rotate: true }) } },
 
   // ── core rounds where the clock timed only the held moves ──
   // See coreCircuit above. Every move in the round now gets its own 30s
