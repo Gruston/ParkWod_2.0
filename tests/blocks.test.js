@@ -118,6 +118,25 @@ test("'rounds each / per exercise / per station' and per-exercise round counts s
   }
 });
 
+// ── AMRAP minutes vs reps; "Ns rest" glued to an exercise ──
+
+test("'AMRAP - 10 Box Jumps' is reps, not a 10-minute AMRAP (#189)", () => {
+  const t = detectBlockTimer("Set a 30-min clock\n0:00 - 10:00: AMRAP - 10 Box Jumps, 10 Dips, 10 Push-ups\n10:00 - 20:00: AMRAP - 5 Burpees, 10 Squats");
+  assert.equal(t.type, "countdown");
+  assert.equal(t.totalSeconds, 30 * 60);
+  assert.equal(detectBlockTimer("AMRAP - 20 min\n40 Plank Jacks").totalSeconds, 20 * 60);
+  assert.equal(detectBlockTimer("AMRAP 20 mins - 6 rows, 10 Push-up").totalSeconds, 20 * 60);
+});
+
+test("a trailing '20s rest' with no dash or comma still becomes the rest period (#88)", () => {
+  const t = detectBlockTimer("4 * 40s uneven plank 20s rest");
+  assert.equal(t.type, "circuit");
+  assert.deepEqual(t.exercises, ["uneven plank"]);
+  assert.equal(t.exerciseSeconds, 40);
+  assert.equal(t.restSeconds, 20);
+  assert.equal(t.totalSeconds, 4 * (40 + 20));
+});
+
 // ── "40s/20s" with unit letters ──
 
 test("interval written with unit letters is still a tabata", () => {

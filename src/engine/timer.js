@@ -62,21 +62,43 @@ export function crossedBoundary(prev, elapsed, step, offset = 0) {
 // enables is switching the CUES off at the end: without it a circuit's
 // position maths wraps straight into a phantom extra round and keeps beeping
 // and calling exercises while the display already reads COMPLETE.
+//
+// Circuits, tabatas and fight-gone-bad blocks are built from repeating
+// work+rest cycles, so their full cycle count ends on a rest. That last rest
+// is a recovery nobody takes — the block is over the moment the final work
+// period ends — so it is trimmed here, in one place. Stored circuit
+// `totalSeconds` keeps counting it (the data convention); this is the end the
+// clock and the displays actually use.
 export function timerDuration(cfg) {
   if (!cfg) return null;
   const positive = (n) => (typeof n === "number" && n > 0 ? n : null);
+  const trimRest = (total, rest) => (total > rest && rest > 0 ? total - rest : total);
   switch (cfg.type) {
     case "countdown":
     case "emom":
-    case "circuit":
       return positive(cfg.totalSeconds);
+    case "circuit":
+      return positive(trimRest(cfg.totalSeconds, cfg.restSeconds || 0));
     case "tabata":
-      return positive((cfg.workSeconds + cfg.restSeconds) * cfg.rounds * (cfg.stations || 1));
+      return positive(trimRest((cfg.workSeconds + cfg.restSeconds) * cfg.rounds * (cfg.stations || 1), cfg.restSeconds));
     case "fgb":
-      return positive((cfg.stationSeconds * cfg.stations + cfg.restSeconds) * cfg.rounds);
+      return positive(trimRest((cfg.stationSeconds * cfg.stations + cfg.restSeconds) * cfg.rounds, cfg.restSeconds));
     default:
       return null; // stopwatch, deathby — open-ended by design
   }
+}
+
+// ── Death By ──
+// Every minute the reps go up until you can't finish inside the minute. A
+// plain "death by burpees" starts at 1 and adds 1, so minute N is N reps — but
+// the library's versions mix moves and start at different counts ("start with
+// 3 KB Swings + 1 Goblet SQ, add 1 of each"). `moves` declares them:
+// [{ name, start, add }], and minute N asks for start + (N - 1) * add of each.
+// Returns null when the block carries no declared moves (the display then
+// falls back to the generic "N reps").
+export function deathByTargets(cfg, minute) {
+  if (!cfg || !Array.isArray(cfg.moves) || cfg.moves.length === 0) return null;
+  return cfg.moves.map(m => ({ name: m.name, reps: m.start + (minute - 1) * (m.add ?? 1) }));
 }
 
 // ── Tabata position ──
@@ -103,7 +125,8 @@ export function tabataPosition(cfg, elapsed) {
   return {
     cycleLen, totalCycles, cycle, withinCycle, isWork,
     secsLeft: isWork ? cfg.workSeconds - withinCycle : cycleLen - withinCycle,
-    done: cycle >= totalCycles,
+    // finished when the final WORK period ends, not after its trailing rest
+    done: elapsed >= timerDuration({ ...cfg, type: "tabata" }),
     stationIdx: stationAt(cycle),
     round: roundAt(cycle),
     nextStationIdx: cycle + 1 < totalCycles ? stationAt(cycle + 1) : null,

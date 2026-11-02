@@ -122,6 +122,26 @@ test("tabatas declared per exercise stay in blocks (#78, #90, #91, #126)", () =>
   }
 });
 
+test("Death By blocks declare what each minute asks for (#160, #161, #202)", () => {
+  for (const id of [160, 161, 202]) {
+    const t = WORKOUT_BLOCKS[id].workout[0].timer;
+    assert.equal(t.type, "deathby", `#${id}`);
+    assert.ok(t.moves.length >= 2, `#${id} should declare its moves`);
+  }
+  assert.deepEqual(WORKOUT_BLOCKS[160].workout[0].timer.moves.map(m => m.start), [1, 2]);
+  assert.deepEqual(WORKOUT_BLOCKS[161].workout[0].timer.moves.map(m => m.start), [3, 1]);
+});
+
+test("#189: a 30-minute running clock, not a 10-minute AMRAP", () => {
+  assert.equal(WORKOUT_BLOCKS[189].workout[0].timer.totalSeconds, 1800);
+});
+
+test("#88: the core plank holds keep their 20s rest", () => {
+  const t = WORKOUT_BLOCKS[88].core[0].timer;
+  assert.equal(t.restSeconds, 20);
+  assert.deepEqual(t.exercises, ["uneven plank"]);
+});
+
 test("#97 override: 5 rounds of 5 stations = 25-minute EMOM", () => {
   const t = WORKOUT_BLOCKS[97].workout[0].timer;
   assert.equal(t.totalMinutes, 25);

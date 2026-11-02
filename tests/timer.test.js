@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createTimerState, timerStart, timerPause, timerIsRunning,
-  computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration, tabataPosition,
+  computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration, tabataPosition, deathByTargets,
 } from "../src/engine/timer.js";
 
 const T0 = 1_000_000_000_000; // arbitrary wall-clock origin
@@ -177,9 +177,25 @@ test("timerDuration: bounded clocks report their programmed length", () => {
   assert.equal(timerDuration({ type: "countdown", totalSeconds: 1200 }), 1200);
   assert.equal(timerDuration({ type: "emom", totalSeconds: 960, totalMinutes: 16 }), 960);
   assert.equal(timerDuration({ type: "circuit", totalSeconds: 300 }), 300);
-  // 8 stations x 2 rounds x (40 + 20) = 16 minutes
-  assert.equal(timerDuration({ type: "tabata", workSeconds: 40, restSeconds: 20, rounds: 2, stations: 8 }), 960);
-  assert.equal(timerDuration({ type: "fgb", stationSeconds: 60, stations: 5, restSeconds: 60, rounds: 3 }), 1080);
+  // 8 stations x 2 rounds x (40 + 20) = 16 minutes, minus the rest nobody takes after the last work period
+  assert.equal(timerDuration({ type: "tabata", workSeconds: 40, restSeconds: 20, rounds: 2, stations: 8 }), 940);
+  assert.equal(timerDuration({ type: "fgb", stationSeconds: 60, stations: 5, restSeconds: 60, rounds: 3 }), 1020);
+});
+
+test("timerDuration: a circuit ends when its last work period does, not after a trailing rest", () => {
+  // 3 rounds x (4 x 30s work + 60s rest) = 540 stored; the final 60s rest is not run
+  assert.equal(timerDuration({ type: "circuit", exerciseSeconds: 30, restSeconds: 60, rounds: 3, exercises: ["a", "b", "c", "d"], totalSeconds: 540 }), 480);
+  // "1 min plank *3 (30s rest)": 3 x (60 + 30) = 270 stored, 240 run
+  assert.equal(timerDuration({ type: "circuit", exerciseSeconds: 60, restSeconds: 30, rounds: 3, exercises: ["plank"], totalSeconds: 270 }), 240);
+  // no rest, nothing to trim
+  assert.equal(timerDuration({ type: "circuit", exerciseSeconds: 30, restSeconds: 0, rounds: 2, exercises: ["a", "b"], totalSeconds: 120 }), 120);
+});
+
+test("deathByTargets: each move climbs from its own starting count", () => {
+  const cfg = { type: "deathby", moves: [{ name: "KB Swings", start: 3, add: 1 }, { name: "Goblet Squats", start: 1, add: 1 }] };
+  assert.deepEqual(deathByTargets(cfg, 1), [{ name: "KB Swings", reps: 3 }, { name: "Goblet Squats", reps: 1 }]);
+  assert.deepEqual(deathByTargets(cfg, 6), [{ name: "KB Swings", reps: 8 }, { name: "Goblet Squats", reps: 6 }]);
+  assert.equal(deathByTargets({ type: "deathby" }, 4), null, "no declared moves -> generic display");
 });
 
 // ── tabata ordering ──
@@ -218,9 +234,10 @@ test("tabataPosition: work/rest phase and finish line", () => {
     { isWork: false, secsLeft: 20 },   // 40s into cycle 2 of 60s: resting, 20s to go
   );
   assert.equal(tabataPosition(cfg, 70).secsLeft, 30);  // 10s into work, 30s left
-  assert.equal(tabataPosition(cfg, 359).done, false);
-  assert.equal(tabataPosition(cfg, 360).done, true);
-  assert.equal(timerDuration(cfg), 360);
+  // 3 stations x 2 rounds x 60s = 360, but the block is over when the last 40s of work ends
+  assert.equal(tabataPosition(cfg, 339).done, false);
+  assert.equal(tabataPosition(cfg, 340).done, true);
+  assert.equal(timerDuration(cfg), 340);
 });
 
 test("timerDuration: open-ended clocks report null", () => {

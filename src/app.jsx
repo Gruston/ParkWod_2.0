@@ -4,7 +4,7 @@ import { CATEGORY_PATTERNS, EXERCISE_INFO } from "./data/exercises.js";
 import { RAW_DATA, DIFFICULTY_COLORS, EQUIPMENT_ICONS, ALL_EQUIPMENT, ALL_RATINGS, ALL_FORMATS, ALL_FOCUSES, ALL_MOVEMENTS, ALL_WORKOUT_MOVEMENTS } from "./data/workouts.js";
 import { VOICE_ABBREVIATIONS, normaliseNotation, expandAbbreviations, speakText, cancelSpeech, speakDuration } from "./engine/voice.js";
 import { parseBlocks, detectBlockTimer } from "./engine/blocks.js";
-import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration, tabataPosition } from "./engine/timer.js";
+import { createTimerState, timerStart, timerPause, timerIsRunning, computeElapsed, crossedBoundary, circuitPosition, circuitSegmentKey, timerDuration, tabataPosition, deathByTargets } from "./engine/timer.js";
 import { toLocalDate, localDateKey, localDateKeyOffset, daysBetweenLocal } from "./engine/dates.js";
 import { loadData, saveData, removeData, migrateIfNeeded, buildBackup, LEGACY_KEYS } from "./engine/storage.js";
 import { WORKOUT_BLOCKS } from "./data/blocks.js";
@@ -733,9 +733,15 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
       if (doBeep && atEnd) { beepFinish(); tryVibrate([200,100,200,100,400]); }
     }
     if (cfg.type === "deathby") {
+      // Say what this minute asks for: the declared moves, or a bare rep count
+      const sayMinute = (min) => {
+        const targets = deathByTargets(cfg, min);
+        speakText(`Minute ${min}. ${targets ? targets.map(t => `${t.reps} ${t.name}`).join(", ") : `${min} ${min === 1 ? "rep" : "reps"}`}`, voiceEnabled, audio);
+      };
       if (crossedBoundary(prev, elapsed, 60, 60)) { if (doBeep) { beepMinute(); tryVibrate(200); }
-        const currentMin = Math.floor(elapsed / 60) + 1;
-        speakText(`Minute ${currentMin}. ${currentMin} reps`, voiceEnabled, audio);
+        sayMinute(Math.floor(elapsed / 60) + 1);
+      } else if (prev === 0 && elapsed >= 1) {
+        sayMinute(1);  // the first minute starts at zero, so no boundary announces it
       }
     }
     if (cfg.type === "circuit") {
@@ -749,15 +755,15 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
         : null;
       // Coaching: halfway + final-minute (before the segment announcements
       // below so those win a speech collision)
-      const circHalf = Math.floor(cfg.totalSeconds / 2);
-      if (coach.halfway && cfg.totalSeconds >= 240 && prev < circHalf && elapsed >= circHalf) {
-        speakText(`Halfway. ${speakDuration(cfg.totalSeconds - circHalf)} to go`, voiceEnabled, audio);
+      const circHalf = Math.floor(duration / 2);
+      if (coach.halfway && duration >= 240 && prev < circHalf && elapsed >= circHalf) {
+        speakText(`Halfway. ${speakDuration(duration - circHalf)} to go`, voiceEnabled, audio);
       }
-      if (coach.finalMinute && cfg.totalSeconds >= 120 && prev < cfg.totalSeconds - 60 && elapsed >= cfg.totalSeconds - 60) {
+      if (coach.finalMinute && duration >= 120 && prev < duration - 60 && elapsed >= duration - 60) {
         speakText("One minute remaining", voiceEnabled, audio);
       }
       // Completion beep (crossing-safe)
-      if (doBeep && prev < cfg.totalSeconds && elapsed >= cfg.totalSeconds) { beepFinish(); tryVibrate([200,100,200,100,400]); }
+      if (doBeep && prev < duration && elapsed >= duration) { beepFinish(); tryVibrate([200,100,200,100,400]); }
       // Segment identity — changes on every exercise change and on entering rest
       const segChanged = elapsed > 0 && circuitSegmentKey(cfg, elapsed) !== circuitSegmentKey(cfg, prev);
       // Start of rest period
@@ -894,7 +900,7 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
     const isRest = withinRound >= stationWork;
     const stationIdx = isRest ? cfg.stations - 1 : Math.floor(withinRound / stSec);
     const secsLeft = isRest ? (roundLen - withinRound) : (stSec - (withinRound % stSec));
-    const done = roundIdx >= cfg.rounds;
+    const done = elapsed >= timerDuration(cfg);  // the last round has no rest after it
     const exName = cfg.exercises && cfg.exercises[stationIdx] ? cfg.exercises[stationIdx] : null;
     const nextStIdx = isRest ? 0 : stationIdx + 1;
     const nextExName = cfg.exercises && cfg.exercises[nextStIdx] ? cfg.exercises[nextStIdx] : null;
@@ -931,14 +937,15 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
   //    with restEvery set, after every N exercises (e.g. after each pair) ──
   if (cfg.type === "circuit") {
     const { roundIdx, exIdx, isRest, secsLeft, numEx } = circuitPosition(cfg, elapsed);
-    const done = elapsed >= cfg.totalSeconds;
+    const duration = timerDuration(cfg);
+    const done = elapsed >= duration;
     const exName = cfg.exercises && cfg.exercises[exIdx] ? cfg.exercises[exIdx] : null;
     // Mid-round rest points to the next exercise; end-of-round rest to the top.
     const nextAfterRest = cfg.exercises
       ? (cfg.restEvery ? cfg.exercises[(exIdx + 1) % cfg.exercises.length] : cfg.exercises[0])
       : null;
     const activeCol = isRest ? oRest : oWork;
-    const pct = Math.min(100, (elapsed / cfg.totalSeconds) * 100);
+    const pct = Math.min(100, (elapsed / duration) * 100);
     return (
       <div style={oTimerBlock}>
         <div style={{...ts.timerLabel, color: oSub}}>{cfg.label}</div>
@@ -989,6 +996,7 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
   if (cfg.type === "deathby") {
     const currentMin = Math.floor(elapsed / 60) + 1;
     const secInMin = elapsed % 60;
+    const targets = deathByTargets(cfg, currentMin);
     return (
       <div style={oTimerBlock}>
         <div style={{...ts.timerLabel, color: oSub}}>DEATH BY EMOM</div>
@@ -999,7 +1007,17 @@ function TimerDisplay({ config, elapsed, audio, countdownLeft, voiceEnabled, out
         <div style={{fontSize: 32, fontVariantNumeric: "tabular-nums", color: oWork, fontWeight: 700}}>
           :{(59 - secInMin).toString().padStart(2, "0")}
         </div>
-        <div style={{fontSize: 15, color: oSub, marginTop: 6, fontWeight: 700}}>{currentMin} reps this minute</div>
+        {targets ? (
+          <div style={{marginTop: 8}}>
+            {targets.map(t => (
+              <div key={t.name} style={{fontSize: Math.max(22, fs.exercise), fontWeight: 800, color: oText, marginTop: 4}}>
+                {t.reps} <span style={{color: oWork}}>{t.name}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{fontSize: 15, color: oSub, marginTop: 6, fontWeight: 700}}>{currentMin} {currentMin === 1 ? "rep" : "reps"} this minute</div>
+        )}
       </div>
     );
   }
@@ -1167,6 +1185,8 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   
   // Lead-in countdown state
   const [countdownLeft, setCountdownLeft] = useState(0);
+  const [countdownPaused, setCountdownPaused] = useState(false);
+  const countdownThenRef = useRef(null);  // what to run when the lead-in ends, kept for resume
   const countdownRef = useRef(null);
   const leadInSeconds = Math.max(0, Number(settings.leadInSeconds ?? DEFAULT_SETTINGS.leadInSeconds));
   
@@ -1289,8 +1309,9 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   // Deadline-based rather than tick-counting, for the same reason the main
   // clock is (see engine/timer.js): an interval that gets throttled would
   // quietly stretch the lead-in past the time it claims to be counting.
-  const startCountdown = useCallback((then) => {
-    const seconds = leadInSeconds;
+  const startCountdown = useCallback((then, secondsOverride) => {
+    const seconds = secondsOverride ?? leadInSeconds;
+    countdownThenRef.current = then;
     if (seconds <= 0) { if (then) then(); return; }
     const endsAt = Date.now() + seconds * 1000;
     setCountdownLeft(seconds);
@@ -1330,6 +1351,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
     setPhaseTimes(prev => ({...prev, [phaseIdx]: (prev[phaseIdx] || 0) + phase_timer.elapsed}));
     clearInterval(countdownRef.current);
     setCountdownLeft(0);
+    setCountdownPaused(false);
     // Cancel any active rest timer
     setRestTimerActive(false); setShowRestPicker(false); clearInterval(restIntervalRef.current);
     phase_timer.reset();
@@ -1349,6 +1371,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   const restartPhase = () => {
     clearInterval(countdownRef.current);
     setCountdownLeft(0);
+    setCountdownPaused(false);
     // Cancel any active rest timer
     setRestTimerActive(false); setShowRestPicker(false); clearInterval(restIntervalRef.current);
     phase_timer.reset();
@@ -1362,12 +1385,18 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   };
 
   const togglePause = () => {
-    // If in countdown, pause/resume the countdown
+    // In the lead-in, pause freezes the countdown (and the session clock) where
+    // it is; resume carries on from the same second.
     if (countdownLeft > 0) {
-      clearInterval(countdownRef.current);
-      setCountdownLeft(0);
-      // Skip remaining countdown — just start the timer
-      phase_timer.start();
+      if (countdownPaused) {
+        setCountdownPaused(false);
+        overall.start();
+        startCountdown(countdownThenRef.current, countdownLeft);
+      } else {
+        clearInterval(countdownRef.current);
+        setCountdownPaused(true);
+        overall.pause();
+      }
       return;
     }
     overall.toggle();
@@ -1377,6 +1406,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
   const handleExit = () => {
     clearInterval(countdownRef.current);
     setCountdownLeft(0);
+    setCountdownPaused(false);
     overall.pause();
     phase_timer.pause();
     setShowExitConfirm(true);
@@ -1414,6 +1444,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
     if (started && !isDone) { overall.start(); phase_timer.start(); }
   };
 
+  const sessionRunning = phase_timer.running || (countdownLeft > 0 && !countdownPaused);
   const handleSaveTimerSettings = (newCfg) => {
     setTimerOverrides(prev => ({...prev, [phaseIdx]: newCfg}));
   };
@@ -1459,10 +1490,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
             const totalTimedSecs = phases.reduce((sum, p) => {
               const t = timerOverrides[phases.indexOf(p)] || p.timer;
               if (!t) return sum;
-              if (t.totalSeconds) return sum + t.totalSeconds;
-              if (t.type === "tabata") return sum + (t.workSeconds + t.restSeconds) * t.rounds * t.stations;
-              if (t.type === "fgb") return sum + (t.stationSeconds * t.stations + t.restSeconds) * t.rounds;
-              return sum;
+              return sum + (timerDuration(t) || 0);
             }, 0);
             return totalTimedSecs > 0 ? (
               <div style={{fontSize: 13, color: "#ccc", marginBottom: 8}}>
@@ -1805,13 +1833,13 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
           </button>
           <button onClick={togglePause} style={{
             border: "none", borderRadius: DS.radius.xl, padding: "16px 36px", fontSize: 15, fontWeight: 800, cursor: "pointer", minWidth: 160,
-            background: (phase_timer.running || countdownLeft > 0) ? DS.gradient.orange : DS.colors.green + "20",
-            color: (phase_timer.running || countdownLeft > 0) ? "#fff" : DS.colors.green,
+            background: sessionRunning ? DS.gradient.orange : DS.colors.green + "20",
+            color: sessionRunning ? "#fff" : DS.colors.green,
             display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
             letterSpacing: 1,
           }}>
-            <Icon name={(phase_timer.running || countdownLeft > 0) ? "pause" : "play"} size={18} color={(phase_timer.running || countdownLeft > 0) ? "#fff" : DS.colors.green} />
-            {(phase_timer.running || countdownLeft > 0) ? "PAUSE SESSION" : "RESUME"}
+            <Icon name={sessionRunning ? "pause" : "play"} size={18} color={sessionRunning ? "#fff" : DS.colors.green} />
+            {sessionRunning ? "PAUSE SESSION" : "RESUME"}
           </button>
         <button onClick={() => goToPhase(phaseIdx + 1)} style={{
           width: 52, height: 52, border: "none", borderRadius: DS.radius.lg, cursor: "pointer",
@@ -1826,7 +1854,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
       {/* Finish block early text link */}
       {!isDone && started && (
         <div style={{position: "absolute", bottom: 4, left: 0, right: 0, textAlign: "center"}}>
-          <button onClick={() => goToPhase(phases.length - 1)} style={{background: "none", border: "none", color: DS.colors.green, fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5, display: "inline-flex", alignItems: "center", gap: 4}}>
+          <button onClick={() => goToPhase(Math.min(phaseIdx + 1, phases.length - 1))} style={{background: "none", border: "none", color: DS.colors.green, fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5, display: "inline-flex", alignItems: "center", gap: 4}}>
             <Icon name="checkCircle" size={12} color={DS.colors.green} /> FINISH BLOCK EARLY
           </button>
         </div>

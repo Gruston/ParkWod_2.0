@@ -23,7 +23,7 @@ function parseBlocks(text) {
     let isNewBlock = false;
     if (current.length > 0) {
       // New AMRAP declaration
-      if (/^\d+\s*MIN\s*AMRAP/i.test(upper) || /^AMRAP\s*[-:]\s*\d+/i.test(upper)) isNewBlock = true;
+      if (/^\d+\s*MIN\s*AMRAP/i.test(upper) || /^AMRAP\s*[-:]\s*\d+\s*M(?:IN(?:UTE)?S?)?\b/i.test(upper)) isNewBlock = true;
       // New EMOM declaration
       else if (/^\d+\s*M(?:IN)?\s*EMOM/i.test(upper) || /^EMOM\s*[-:]\s*\d+/i.test(upper)) isNewBlock = true;
       // "Then" separator
@@ -190,7 +190,7 @@ function detectBlockTimer(text) {
   }
   
   // AMRAP
-  const amrapM = upper.match(/(\d+)\s*MIN\s*AMRAP/i) || upper.match(/AMRAP\s*[-:]*\s*(\d+)/i);
+  const amrapM = upper.match(/(\d+)\s*MIN\s*AMRAP/i) || upper.match(/AMRAP\s*[-:]*\s*(\d+)\s*M(?:IN(?:UTE)?S?)?\b/i);  // "AMRAP - 10 Box Jumps" is reps, not 10 minutes
   if (amrapM) {
     const mins = parseInt(amrapM[1]);
     return { type: "countdown", totalSeconds: mins * 60, label: `${mins} Min AMRAP` };
@@ -351,7 +351,7 @@ function detectBlockTimer(text) {
       if (/\d+\s*(?:s(?:ec)?|min|m(?=\s))\s+\w/i.test(cBody)) {
         let cRest = 0;
         // Trailing "- Xs rest" or ", Xs rest" before end
-        const cTrailRest = cBody.match(/\s*[-–,]\s*(\d+)\s*(s(?:ec)?|min)\s*rest\s*$/i);
+        const cTrailRest = cBody.match(/\s*(?:[-–,]\s*|\s)(\d+)\s*(s(?:ec)?|min)\s*rest\s*$/i);
         if (cTrailRest) { cRest = parseDur(cTrailRest[1] + ' ' + cTrailRest[2]) || parseInt(cTrailRest[1]); cBody = cBody.slice(0, cBody.length - cTrailRest[0].length).trim(); }
         // "(Xs rest)" in parens at end
         const cParenRest = cBody.match(/\s*\(\s*(\d+)\s*(s(?:ec)?|min)\s*rest\s*\)\s*$/i);

@@ -80,6 +80,9 @@ const tabata = (exercises, rounds, workSeconds = 40, restSeconds = 20, { rotate 
   exercises, ...(rotate ? { rotate: true } : {}), label: `Tabata ${workSeconds}s/${restSeconds}s`,
 });
 
+// Death By: every minute each move goes up by `add` from its starting count.
+const deathBy = (moves) => ({ type: "deathby", moves, label: "Death By EMOM" });
+
 const countdown = (seconds, label) => ({ type: "countdown", totalSeconds: secs(seconds), label });
 
 const stopwatch = (label = "Rounds") => ({ type: "stopwatch", label });
@@ -159,9 +162,11 @@ const CORRECTIONS = {
   95:  { splits: [4] },
   100: { splits: [2, 4] },
   101: { splits: [2] },
-  160: { splits: [3] },
+  // Death By blocks that start above 1 rep, or mix moves: say what each minute asks for
+  160: { splits: [3], timers: { 0: deathBy([{ name: "Burpees", start: 1, add: 1 }, { name: "Box Jumps", start: 2, add: 1 }]) } },
+  161: { timers: { 0: deathBy([{ name: "KB Swings", start: 3, add: 1 }, { name: "Goblet Squats", start: 1, add: 1 }]) } },
   197: { splits: [3] },
-  202: { splits: [2] },
+  202: { splits: [2], timers: { 0: deathBy([{ name: "DB Thrusters", start: 1, add: 1 }, { name: "Box Jumps", start: 1, add: 1 }]) } },
 
   // ── core sections: pair circuits the parser reads as untimed prose ──
   9:   { coreTimers: { 0: timedRun(["Plankup", "2 punch crunch", "mountain climbers", "cycle crunches", "plank toe touches", "ankle touches"]) } },
