@@ -1783,7 +1783,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
       {/* Floating REST button — for stopwatch/rounds phases */}
       {started && !isDone && activeTimer && activeTimer.type === "stopwatch" && !restTimerActive && !showRestPicker && (
         <button onClick={() => setShowRestPicker(true)} style={{
-          position: "absolute", right: 16, bottom: 100, zIndex: 20,
+          position: "absolute", right: 16, bottom: "calc(100px + env(safe-area-inset-bottom))", zIndex: 20,
           background: "linear-gradient(135deg, #3b82f6, #2563eb)", border: "none", borderRadius: 50,
           width: 56, height: 56, display: "flex", alignItems: "center", justifyContent: "center",
           color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer",
@@ -1822,7 +1822,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
 
       {/* Bottom controls — hidden on done screen since it has its own CTA buttons */}
       {!isDone && (
-      <div style={{position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", alignItems: "center", gap: 10, padding: "14px 16px 28px", background: outdoorMode ? "linear-gradient(transparent, #f5f5f0 30%)" : "linear-gradient(transparent, #0a0a0f 30%)"}}>
+      <div style={{position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", alignItems: "center", gap: 10, padding: "14px 16px calc(28px + env(safe-area-inset-bottom))", background: outdoorMode ? "linear-gradient(transparent, #f5f5f0 30%)" : "linear-gradient(transparent, #0a0a0f 30%)"}}>
         {phaseIdx > 0 && (
           <button onClick={() => goToPhase(phaseIdx - 1)} style={{width: 52, height: 52, background: outdoorMode ? "#00000008" : DS.colors.surface, border: `1px solid ${outdoorMode ? "#ccc" : DS.colors.border}`, borderRadius: DS.radius.lg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer"}}>
             <Icon name="skipBack" size={20} color={outdoorMode ? "#333" : DS.colors.textSub} />
@@ -1853,7 +1853,7 @@ function FullScreenWorkout({ workout, onExit, settings, onUpdateSettings, onLogW
 
       {/* Finish block early text link */}
       {!isDone && started && (
-        <div style={{position: "absolute", bottom: 4, left: 0, right: 0, textAlign: "center"}}>
+        <div style={{position: "absolute", bottom: "calc(4px + env(safe-area-inset-bottom))", left: 0, right: 0, textAlign: "center"}}>
           <button onClick={() => goToPhase(Math.min(phaseIdx + 1, phases.length - 1))} style={{background: "none", border: "none", color: DS.colors.green, fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5, display: "inline-flex", alignItems: "center", gap: 4}}>
             <Icon name="checkCircle" size={12} color={DS.colors.green} /> FINISH BLOCK EARLY
           </button>
@@ -2832,7 +2832,7 @@ function BuilderScreen({ initialDraft, editingId, logsCount, onSave, onCancel })
   );
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: DS.colors.bg, zIndex: 850, display: "flex", flexDirection: "column" }}>
+    <div style={{ position: "fixed", inset: 0, background: DS.colors.bg, zIndex: 850, display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top)" }}>
       {/* datalist for exercise autocomplete (encyclopedia names) */}
       <datalist id="builder-exercise-list">
         {Object.values(EXERCISE_INFO).map(info => <option key={info.name} value={info.name} />)}
@@ -2845,7 +2845,7 @@ function BuilderScreen({ initialDraft, editingId, logsCount, onSave, onCancel })
         <button onClick={handleSave} style={{ background: DS.gradient.green, border: "none", borderRadius: 10, padding: "8px 18px", color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>SAVE</button>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: 20, paddingBottom: 60 }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: 20, paddingBottom: "calc(60px + env(safe-area-inset-bottom))" }}>
         {/* Live phase preview */}
         {phasePreview.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
@@ -3587,7 +3587,7 @@ function App() {
       {/* Fresh-result share offer */}
       {justLogged && (
         <div style={{
-          position: "fixed", bottom: 92, left: 16, right: 16, zIndex: 795,
+          position: "fixed", bottom: "calc(92px + env(safe-area-inset-bottom))", left: 16, right: 16, zIndex: 795,
           background: "#111122", border: "1px solid #3ddc8450", borderRadius: 16, padding: "12px 16px",
           display: "flex", alignItems: "center", gap: 12, boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
         }}>
@@ -3602,7 +3602,7 @@ function App() {
       {/* Monthly backup nudge */}
       {backupNudge && !storageError && (
         <div style={{
-          position: "fixed", bottom: 92, left: 16, right: 16, zIndex: 790,
+          position: "fixed", bottom: "calc(92px + env(safe-area-inset-bottom))", left: 16, right: 16, zIndex: 790,
           background: "#111122", border: "1px solid #3ddc8450", borderRadius: 16, padding: "14px 16px",
           display: "flex", alignItems: "center", gap: 12, boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
         }}>
@@ -3618,7 +3618,7 @@ function App() {
           so it never interrupts an active workout */}
       {updateReady && (
         <button onClick={() => location.reload()} style={{
-          position: "fixed", bottom: 92, left: "50%", transform: "translateX(-50%)",
+          position: "fixed", bottom: "calc(92px + env(safe-area-inset-bottom))", left: "50%", transform: "translateX(-50%)",
           zIndex: 800, background: DS.gradient.orange, color: "#fff", border: "none",
           borderRadius: 24, padding: "12px 22px", fontWeight: 700, fontSize: 14,
           boxShadow: "0 4px 20px rgba(0,0,0,0.5)", cursor: "pointer", fontFamily: DS.font.body,
@@ -4770,7 +4770,7 @@ const sty = {
   secondaryBtn: { flex: 1, background: DS.colors.surfaceLight, border: "1px solid " + DS.colors.border, borderRadius: DS.radius.xl, padding: "16px 20px", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: DS.font.body },
   sectionTitle: { fontSize: 11, fontWeight: 700, color: DS.colors.textMuted, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 10 },
   statCard: { background: DS.colors.surface, border: "1px solid " + DS.colors.border, borderRadius: DS.radius.lg, padding: "12px 16px", flex: "1 1 70px", minWidth: 70 },
-  nav: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, display: "flex", justifyContent: "space-around", background: DS.colors.bg, borderTop: "1px solid " + DS.colors.border, padding: "8px 0 12px", zIndex: 100, backdropFilter: "blur(10px)" },
+  nav: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, display: "flex", justifyContent: "space-around", background: DS.colors.bg, borderTop: "1px solid " + DS.colors.border, padding: "8px 0 calc(12px + env(safe-area-inset-bottom))", zIndex: 100, backdropFilter: "blur(10px)" },
   navBtn: { background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer", padding: "4px 12px", fontFamily: DS.font.body },
   searchInput: { width: "100%", background: DS.colors.surface, border: "1px solid " + DS.colors.border, borderRadius: DS.radius.lg, padding: "14px 16px", color: "#fff", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: DS.font.body },
   filterToggle: { background: "none", border: "1px solid " + DS.colors.border, borderRadius: DS.radius.pill, padding: "8px 14px", color: DS.colors.textSub, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: DS.font.body },
@@ -4788,12 +4788,12 @@ const sty = {
   modalContent: { background: DS.colors.surfaceLight, borderRadius: DS.radius.xl, padding: 24, maxWidth: 380, width: "100%", border: "1px solid " + DS.colors.border, position: "relative", maxHeight: "80vh", overflowY: "auto" },
   modalClose: { position: "absolute", top: 12, right: 16, background: "none", border: "none", color: DS.colors.textMuted, fontSize: 20, cursor: "pointer" },
   // Full screen workout mode
-  fsOverlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: DS.colors.bg, zIndex: 900, display: "flex", flexDirection: "column" },
+  fsOverlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: DS.colors.bg, zIndex: 900, display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top)" },
   fsTopBar: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", borderBottom: "1px solid " + DS.colors.border },
   fsExitBtn: { background: "none", border: "1px solid " + DS.colors.border, borderRadius: DS.radius.md, padding: "8px 16px", color: "#ef4444", fontSize: 14, fontWeight: 600, cursor: "pointer" },
   fsDots: { display: "flex", justifyContent: "center", gap: 8, padding: "16px 20px 0", alignItems: "center" },
   fsDot: { height: 10, borderRadius: 5, transition: "all 0.3s ease" },
-  fsContent: { flex: 1, overflowY: "auto", paddingBottom: 100 },
+  fsContent: { flex: 1, overflowY: "auto", paddingBottom: "calc(100px + env(safe-area-inset-bottom))" },
   fsNavBar: { position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px 28px", background: "linear-gradient(transparent, " + DS.colors.bg + " 30%)" },
   fsPrevBtn: { background: "none", border: "1px solid " + DS.colors.border, borderRadius: DS.radius.xl, padding: "14px 22px", color: DS.colors.textSub, fontSize: 15, fontWeight: 600, cursor: "pointer" },
   fsNextBtn: { border: "none", borderRadius: DS.radius.xl, padding: "14px 28px", color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer" },
